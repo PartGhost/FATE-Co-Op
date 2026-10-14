@@ -1,0 +1,17 @@
+research/
+tools/ilspycmd/
+tools/*.zip
+tools/dotnet/
+tools/dotnet-home/
+tools/bepinex/
+tools/cecil/
+tools/dotnet-install.ps1
+.dotnet-home/
+.nuget/
+artifacts/
+test-game/
+test-game-b/
+test-saves/
+bin/
+obj/
+*.user
