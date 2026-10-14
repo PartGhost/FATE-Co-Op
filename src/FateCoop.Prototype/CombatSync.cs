@@ -47,8 +47,8 @@ public sealed partial class Plugin
     }
     private void StartCombat()
     {
-        if (instance != "a" || !movementSession || !SharedWorldReady() || SceneLoad.CurrentScene != Tableflip.Scene.Dungeon)
-            throw new InvalidOperationException("Start the shared monster test from host A's connected dungeon.");
+        if (!isHost || !movementSession || !SharedWorldReady() || SceneLoad.CurrentScene != Tableflip.Scene.Dungeon)
+            throw new InvalidOperationException("Start the shared monster test from the host's connected dungeon.");
         ResetCombat();
         var source = UnityEngine.Object.FindObjectsOfType<Monster>().Where(m => !m.IsPet() && m != remotePet && m.monsterData != null && !m.IsBoss && !m.isUnique && m.GetAlignment() == Alignment.Evil)
             .OrderBy(m => Vector3.Distance(m.transform.position, Player.PlayerChar.transform.position)).FirstOrDefault();
@@ -76,14 +76,14 @@ public sealed partial class Plugin
         monster.maxHpBase = 80; monster.hp = 80;
         monster.allowDropInventory = false; monster.allowDropEquipment = false;
         monster.SetPositionProper(position);
-        if (instance == "b") monster.UnRegisterKilled();
+        if (!isHost) monster.UnRegisterKilled();
         return monster;
     }
     private void RequestTestAttack(string source)
     {
         if (!movementSession || !SharedWorldReady() || combatMonster == null || combatId.Length == 0) throw new InvalidOperationException("No shared test monster is ready.");
         if (source != "player" && source != "pet") throw new InvalidOperationException("Attack source must be player or pet.");
-        if (instance == "a")
+        if (isHost)
         {
             var attacker = source == "pet" ? Player.PlayerChar.GetPet() : Player.PlayerChar;
             ConfirmHit("a", source, attacker != null ? attacker.transform.position : Vector3.one * 9999);
@@ -118,7 +118,7 @@ public sealed partial class Plugin
     }
     private CombatSnapshot CombatState()
     {
-        if (instance == "b") return replicaCombat;
+        if (!isHost) return replicaCombat;
         if (combatMonster == null) return new CombatSnapshot();
         var animator = combatMonster.GetComponent<Animator>();
         return new CombatSnapshot { present = true, id = combatId, model = combatMonster.monsterData.displayName, position = combatMonster.transform.position,
@@ -142,7 +142,7 @@ public sealed partial class Plugin
     }
     private void UpdateCombatReplica()
     {
-        if (instance != "b" || combatMonster == null || !replicaCombat.present) return;
+        if (isHost || combatMonster == null || !replicaCombat.present) return;
         var agent = combatMonster.GetComponent<NavMeshAgent>();
         if (agent != null && agent.enabled && agent.isOnNavMesh) agent.Warp(replicaCombat.position);
         combatMonster.transform.rotation = Quaternion.Euler(0, replicaCombat.yaw, 0);

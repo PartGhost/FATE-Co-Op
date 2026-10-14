@@ -1,4 +1,17 @@
-# Grove co-op prototype — 0.6.0
+# Grove co-op prototype — 0.7.0
+
+## Steam lobbies and the direct game link
+
+The games now talk to each other directly. The outside relay, the single-game debug client and its TCP command port are gone. Each game sends a frame 20 times a second (world key, scene, player pose, pet, host combat state or guest attack intent). The guest follows the host: when the host is on a dungeon floor the guest doesn't have, the guest sends `world-request` and the host replies with its floor snapshot as a message. When the host returns to Grove, the guest goes back to town. Host and guest are session roles, not folders A and B, so a friend's `test-game` can join as the guest.
+
+The same messages travel over two links. The local link is a loopback TCP connection from the joining game straight to the host game, for one-PC testing. The Steam link is a friends-only, two-player Steam lobby plus `SteamNetworkingMessages`; the host only accepts network sessions from the lobby member who joined. Messages carry the mod version, and a game drops the session if its partner runs a different version. A partner who stops sending for 10 seconds is dropped, which removes their player and pet and lifts the test protections.
+
+- **Steam:** start FATE from Steam (its launch option runs `test-game`), continue a character, press **Host Steam co-op** on the panel, then **Invite friend** or invite from the Shift+Tab overlay. Accepting the invite joins the lobby, whether the friend's game is already running or Steam launches it with `+connect_lobby`. **Leave co-op** ends the session.
+- **One PC:** `Start-TwoGames.ps1` launches both copies, opens Grove and runs `Connect-TwoGames.ps1`, which sends `host-local` to A and `join-local <port>` to B. Send `leave` to either game to disconnect.
+
+Command files also accept `host-steam`, `join-steam <lobby id>`, `invite` and `leave`. `status.json` reports `sessionRole`, `localPort` and `networkConnected`.
+
+0.7 acceptance on the local link passed: two-player movement (A 4.52, B 3.01 units, replicas within 0.25 units, no rejected messages); shared floors 1–3 and back to Grove; shared combat with both players and the guest pet; leaving removed the remote player and pet on both sides, and rejoining restored them on the same floor. On Steam, a game started from Steam created the lobby and opened the invite dialog. Joining needs a second Steam account and hasn't been tested yet.
 
 ## Remote pets and one shared monster
 
@@ -8,17 +21,17 @@ In a connected dungeon, use A's **Start / reset shared monster test** button. Cl
 
 `Test-SharedCombat.ps1` checks contributions from both players and the joining pet, matching health, one death and pet/guest counts. A normal mouse attack in B was also verified to reduce the same host-owned monster's health in both games. Pet combat animations, pet health/inventory, character-stat damage, spells, player damage, shared XP/quests and loot are not implemented. Native quest callbacks on the host are not yet replaced by a shared quest system; use disposable characters.
 
-Peer entity snapshots currently travel through checksum-verified, bounded workspace files alongside the localhost TCP control channel. Pet/combat DTOs use separately serialized JSON strings because Unity omitted nested plugin DTOs in live testing. Second-PC transport and Steam joining remain future work.
+Pet/combat DTOs use separately serialized JSON strings because Unity omitted nested plugin DTOs in live testing.
 
 0.6 acceptance passed: combat health/death checks; independent navigation and matching layouts on floors 1–3; one local and one remote pet in each game across all transitions; zero remote pets after disconnect and exactly one after rejoin. Pet replica position errors after settling were 0.063 and 0.001 units. The movement telemetry verifier passed both directions without duplicate guests, and original save/assembly hashes remained unchanged. Reports are in `artifacts/shared-combat-verification.json`, `shared-dungeon-verification.json`, `pet-disconnect-verification.json`, `pet-rejoin-verification.json`, and `runtime/verification.json`.
 
 ## Shared dungeon floor prototype
 
-Instance A now owns floor selection. B follows A into the Grove dungeon, down floors and back to town. The host exports `DungeonSaveData`; the local relay copies its serialized snapshot into B's runtime directory and sends a checksum-verified join request. B installs the record immediately before the game's saved-floor loader and retains its own player/inventory/pet records. Both instances hash maze cell data and staircase positions. Movement replication resumes only when their verified world identities match.
+Instance A now owns floor selection. B follows A into the Grove dungeon, down floors and back to town. The host exports `DungeonSaveData` and sends it to B, which installs the record immediately before the game's saved-floor loader and retains its own player/inventory/pet records. Both instances hash maze cell data and staircase positions. Movement replication resumes only when their verified world identities match.
 
-World snapshot delivery currently uses workspace files, so second-PC joining requires a bounded network snapshot transfer. Steam invitation handling and importing real characters are not implemented. During a connected session, unrelated monster AI is stopped and ground/container pickups are disabled. Disconnect releases the test protections and removes guests and remote pets. Items dropped manually are still local; shared drops, XP and quest rewards are future work.
+Importing real characters is not implemented. During a connected session, unrelated monster AI is stopped and ground/container pickups are disabled. Disconnect releases the test protections and removes guests and remote pets. Items dropped manually are still local; shared drops, XP and quest rewards are future work.
 
-To test: use `Start-TwoGames.ps1`, keep A as the host, enter the Grove dungeon in A, and let B follow. Only A selects floors for the shared session. `Test-SharedDungeon.ps1` automates matching floor 1, independent movement, floors 2 and 3, and return to town. Its tests use disposable saves. Existing `Open-TestGrove.ps1` returns test characters to town before starting a new relay.
+To test: use `Start-TwoGames.ps1`, keep A as the host, enter the Grove dungeon in A, and let B follow. Only A selects floors for the shared session. `Test-SharedDungeon.ps1` automates matching floor 1, independent movement, floors 2 and 3, and return to town. Its tests use disposable saves. `Open-TestGrove.ps1` returns test characters to town before connecting.
 
 Acceptance passed: both layouts matched on floors 1, 2 and a newly generated floor 3; both characters moved over 4.5 units independently on floor 1 and their replicas converged; one guest appeared per instance; both returned to Grove. Joining a host already on floor 1 and disconnect/rejoin on that floor also passed. See `artifacts/shared-dungeon-verification.json` and `artifacts/shared-floor-rejoin-verification.json`. Original save and assembly hashes remained unchanged. Builds passed without warnings/errors; parser checks covered 11 valid and 15 invalid requests. Primary identity is checked within each loaded world; the game legitimately recreates its primary character during floor changes.
 
@@ -42,13 +55,13 @@ Launch both games, continue their test characters in Grove and connect them:
 .\tools\Start-TwoGames.ps1
 ```
 
-Switch between windows and move normally. The top panel identifies A or B; the guest label identifies the remote player. A selects the shared floor; B follows its verified snapshot. Ctrl+C stops the relay and removes reachable guests. A broken socket removes that instance's remote guest. Only localhost connections are supported.
+Switch between windows and move normally. The top panel identifies A or B; the guest label identifies the remote player. A selects the shared floor; B follows its verified snapshot.
 
-If both games are already open, use `.\tools\Start-TwoPlayerRelay.ps1`. Add `-Background` to run a hidden helper; `Stop-TwoPlayerRelay.ps1` requests graceful shutdown. `Test-TwoPlayerMovement.ps1` requires an active relay and moves each primary through its navigation agent, then checks both replicas, unchanged primary identities and one guest per instance. This fixture complements manual mouse/keyboard testing.
+If both games are already open, use `.\tools\Connect-TwoGames.ps1`. `Test-TwoPlayerMovement.ps1` requires a connected pair and moves each primary through its navigation agent, then checks both replicas, unchanged primary identities and one guest per instance. This fixture complements manual mouse/keyboard testing.
 
 The final 0.4 acceptance run passed: A moved 4.51 units, B moved 3.01 units, both guests matched the opposite primary within 0.25 units after settling, primary identities stayed intact, one guest appeared per game and no requests were rejected. Stopping the relay removed both guests. The combined telemetry check observed walking animations, independent movement in both directions and rendered meshes without duplicate actors. Original save and assembly hashes matched their recorded values. Builds passed with zero warnings/errors; protocol checks covered 6 valid and 12 invalid frames.
 
-Reports: `artifacts/pair-result.json`, `artifacts/pair-telemetry.jsonl`, `artifacts/two-player-verification.json`, and each instance's runtime folder. Avoid F9 scripted guest routes while the relay owns the guest.
+Reports: `artifacts/two-player-verification.json` and each instance's runtime folder. Avoid F9 scripted guest routes while connected; the session owns the guest.
 
 The requested target is Original FATE, starting in Grove. Cross-expansion dungeons and quests are deferred until co-op works here.
 
@@ -90,9 +103,7 @@ Runtime logs and measurements are in `artifacts/runtime`. A command file can con
 .\tools\Verify-Prototype.ps1
 ```
 
-Open another PowerShell window in the workspace and run `.\tools\Start-LocalClient.ps1`. Commands: `spawn`, `step 5 0`, `step 0 5`, `move X Z`, `stop`, `status`, `despawn`, and `exit`. Destinations use world X/Z coordinates. The client refreshes its world epoch before commands; destinations without a complete navigation path are rejected. Disconnecting stops the guest.
-
-Automated checks: `Start-LocalClient.ps1 -Probe` checks invalid protocol requests; `-Demo` measures independent guest movement; `-DisconnectTest` closes during movement. `Test-Lifecycle.ps1` tests three spawn/despawn cycles, Grove floor 1, floor 2 and return to town. It temporarily protects the test host from damage. Run only on disposable test characters. `test-resume` dismisses tutorial prompts and resumes the sandbox for testing; normal guest respawning preserves pause state.
+`Test-Lifecycle.ps1` tests three spawn/despawn cycles, Grove floor 1, floor 2 and return to town. It temporarily protects the test host from damage. Run only on disposable test characters. `test-resume` dismisses tutorial prompts and resumes the sandbox for testing; normal guest respawning preserves pause state.
 
 ## Verified 0.3.0 results
 

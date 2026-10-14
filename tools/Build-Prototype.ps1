@@ -35,10 +35,4 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Instance B sandbox patching failed.' }
         Copy-Item -LiteralPath 'src\FateCoop.Prototype\bin\Release\netstandard2.1\FateCoop.Prototype.dll' -Destination 'test-game-b\BepInEx\plugins'
     }
-    & $dotnet restore src\FateCoop.Client\FateCoop.Client.csproj --configfile NuGet.Config
-    if ($LASTEXITCODE -ne 0) { throw 'Client restore failed.' }
-    & $dotnet build src\FateCoop.Client\FateCoop.Client.csproj -c Release --nologo --no-restore -p:UseSharedCompilation=false
-    if ($LASTEXITCODE -ne 0) { throw 'Client build failed.' }
-    & $dotnet src\FateCoop.Client\bin\Release\net8.0\FateCoop.Client.dll --protocol-test
-    if ($LASTEXITCODE -ne 0) { throw 'Protocol verification failed.' }
 } finally { Pop-Location }

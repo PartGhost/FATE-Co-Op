@@ -7,6 +7,7 @@ using System.Linq;
 using BepInEx;
 using BepInEx.Unity.Mono;
 using HarmonyLib;
+using Steamworks;
 using Tableflip;
 using UnityEngine;
 using UnityEngine.AI;
@@ -16,7 +17,7 @@ using Object = UnityEngine.Object;
 
 namespace FateCoop.Prototype;
 
-[BepInPlugin("local.fatecoop.prototype", "FATE Co-Op Movement Prototype", "0.6.0")]
+[BepInPlugin("local.fatecoop.prototype", "FATE Co-Op Movement Prototype", Version)]
 public sealed partial class Plugin : BaseUnityPlugin
 {
     internal static Plugin? Active;
@@ -32,7 +33,6 @@ public sealed partial class Plugin : BaseUnityPlugin
     private bool guestWanted, transitioning, worldReady;
     private Coroutine? respawn;
     private int worldEpoch;
-    private LoopbackServer? network;
     private int networkAccepted, networkRejected;
     private bool mirroring;
     private Vector3 mirrorTarget;
@@ -74,9 +74,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             harmony.Patch(AccessTools.Method(typeof(LevelGenerator), "OnFinishCreation"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterWorldReady)));
             InstallWorldHooks();
             InstallEntityHooks();
-            network = new LoopbackServer();
-            File.WriteAllText(Path.Combine(controlRoot, "endpoint.json"), JsonUtility.ToJson(new Endpoint { port = network.Port, token = network.Token }, true));
-            Logger.LogInfo("LOOPBACK_READY 127.0.0.1:" + network.Port);
+            commandLineLobby = LobbyFromCommandLine();
             SetStatus("Ready. Save isolation verified; F8 spawns, F9 walks, F10 stops.");
             Logger.LogInfo("ISOLATION_OK " + actual);
             Snapshot();
@@ -178,71 +176,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         try
         {
             var keyboard = Keyboard.current;
-            if (network != null)
-            {
-                if (network.ConsumeDisconnect()) { if (mirroring) Despawn(); else StopRoute(); RestoreSessionSafety(); }
-                while (network.Requests.TryDequeue(out var request))
-                {
-                    if (request.Cancelled) { request.Done.Set(); continue; }
-                    var command = request.Command;
-                    var reply = new NetworkReply { sequence = command.Sequence };
-                    try
-                    {
-                        if (command.Operation != "status")
-                        {
-                            if (command.Epoch != worldEpoch) throw new InvalidOperationException("Stale world epoch; refresh status.");
-                            if (transitioning) throw new InvalidOperationException("World is transitioning; retry after status reports ready.");
-                            if (command.Operation == "peer-frame") ApplyPeerFrame(command.Argument);
-                            else if (command.Operation == "join-world") JoinWorld(command.Argument);
-                            else if (command.Operation == "export-world") ExportWorld();
-                            else if (command.Operation == "mirror")
-                            {
-                                if (!SharedWorldReady()) throw new InvalidOperationException("Wait for a verified Grove world.");
-                                if (Math.Abs(command.X) > 2000f || Math.Abs(command.Z) > 2000f)
-                                    throw new InvalidOperationException("Position is outside Grove bounds.");
-                                if (!NavMesh.SamplePosition(new Vector3(command.X, Player.PlayerChar!.transform.position.y, command.Z), out var hit, 2f, NavMesh.AllAreas))
-                                    throw new InvalidOperationException("Remote position has no nearby navigation surface.");
-                                if (actor == null) Spawn();
-                                if (!mirroring) StopRoute();
-                                mirrorTarget = hit.position;
-                                mirrorYaw = command.Yaw;
-                                lastMirrorTime = Time.unscaledTime;
-                                mirroring = true;
-                            }
-                            else if (command.Operation == "move")
-                            {
-                                if (actor == null) throw new InvalidOperationException("Spawn a guest first.");
-                                var desired = new Vector3(command.X, actor.transform.position.y, command.Z);
-                                if (Vector3.Distance(actor.transform.position, desired) > 100f) throw new InvalidOperationException("Destination exceeds prototype movement range.");
-                                StopRoute();
-                                Move(actor, desired);
-                            }
-                            else Execute(command.Operation);
-                        }
-                        reply.ok = true;
-                        networkAccepted++;
-                    }
-                    catch (Exception e) { reply.error = e.Message; networkRejected++; }
-                    reply.epoch = worldEpoch;
-                    reply.transitioning = transitioning;
-                    reply.scene = SceneManager.GetActiveScene().name;
-                    reply.primaryId = Player.PlayerChar != null ? Player.PlayerChar.GetInstanceID() : 0;
-                    reply.guestId = actor != null ? actor.GetInstanceID() : 0;
-                    reply.guestPosition = actor != null ? actor.transform.position : Vector3.zero;
-                    reply.primaryPosition = Player.PlayerChar != null ? Player.PlayerChar.transform.position : Vector3.zero;
-                    reply.primaryYaw = Player.PlayerChar != null ? Player.PlayerChar.transform.eulerAngles.y : 0f;
-                    reply.groveReady = !transitioning && SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove && Player.PlayerChar != null && Player.PlayerChar.Alive();
-                    reply.worldReady = SharedWorldReady();
-                    reply.worldKey = CurrentWorldKey();
-                    reply.layoutHash = layoutHash;
-                    reply.depth = LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth() : 0;
-                    reply.petJson = JsonUtility.ToJson(LocalPetSnapshot());
-                    reply.combatJson = JsonUtility.ToJson(CombatState());
-                    reply.attackJson = pendingAttack != null ? JsonUtility.ToJson(pendingAttack) : "";
-                    request.Reply = JsonUtility.ToJson(reply);
-                    request.Done.Set();
-                }
-            }
+            UpdateSession();
             if (keyboard != null)
             {
                 if (keyboard.f8Key.wasPressedThisFrame) { if (actor != null) Despawn(); else Spawn(); }
@@ -287,12 +221,24 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "save": SaveData.RequestSave(); break;
             case "combat-start": StartCombat(); break;
             case "test-attack": RequestTestAttack(parts.Length > 1 ? parts[1] : "player"); break;
-            case "session-on": movementSession = true; break;
-            case "session-off": RestoreSessionSafety(); Despawn(); break;
-            case "join-town":
-                if (instance != "b") throw new InvalidOperationException("Only joining instance B follows the host.");
-                if (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon) Execute("town");
+            case "host-local": StartSession(LocalLink.Listen(), true); break;
+            case "join-local":
+                if (parts.Length != 2) throw new ArgumentException("join-local <port>");
+                StartSession(LocalLink.Connect(int.Parse(parts[1], CultureInfo.InvariantCulture)), false);
                 break;
+            case "host-steam":
+                if (!SteamReady) throw new InvalidOperationException("Steam is not running for this game.");
+                StartSession(SteamLink.Host(SetStatus), true);
+                break;
+            case "join-steam":
+                if (parts.Length != 2) throw new ArgumentException("join-steam <lobby id>");
+                JoinSteam(new CSteamID(ulong.Parse(parts[1], CultureInfo.InvariantCulture)));
+                break;
+            case "invite":
+                if (!(link is SteamLink { CanInvite: true } steam)) throw new InvalidOperationException("Host a Steam lobby first.");
+                steam.Invite();
+                break;
+            case "leave": EndSession("Left co-op."); break;
             case "test-walk":
                 if (parts.Length != 3 || !SharedWorldReady())
                     throw new InvalidOperationException("test-walk <dx> <dz> requires a ready Grove world.");
@@ -566,10 +512,11 @@ public sealed partial class Plugin : BaseUnityPlugin
             guestOnNavMesh = agent != null && agent.isOnNavMesh, guestVelocity = agent != null ? agent.velocity : Vector3.zero,
             guestWalking = animator != null && animator.GetBool("IsWalking"), spawnedTotal = spawnCount,
             aiCallsSuppressed = suppressedAI, saveLoaded = SaveData.HasLoaded,
-            steamInitialized = AccessTools.StaticFieldRefAccess<SteamManager, bool>("s_EverInitialized"),
+            steamInitialized = SteamReady,
             campaign = Fate.CurrentFateVer.ToString(), renderers = renderers.Length,
             worldEpoch = worldEpoch, transitioning = transitioning, dungeonDepth = LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth() : 0,
-            networkConnected = network != null && network.Connected, networkAccepted = networkAccepted, networkRejected = networkRejected,
+            networkConnected = peerConnected, networkAccepted = networkAccepted, networkRejected = networkRejected,
+            sessionRole = link == null ? "" : isHost ? "host" : "guest", localPort = link is LocalLink local ? local.Port : 0,
             worldReady = worldReady, paused = Fate.isPaused, primaryAlive = host != null && host.Alive(),
             layoutHash = layoutHash, worldKey = CurrentWorldKey(), movementSession = movementSession,
             localPetJson = JsonUtility.ToJson(LocalPetSnapshot()), remotePetId = remotePet != null ? remotePet.GetInstanceID() : 0,
@@ -597,11 +544,11 @@ public sealed partial class Plugin : BaseUnityPlugin
         {
             var screenPoint = Camera.main.WorldToScreenPoint(actor.transform.position + Vector3.up * 2.4f);
             if (screenPoint.z > 0)
-                GUI.Box(new Rect(screenPoint.x - 70, Screen.height - screenPoint.y - 12, 140, 24), mirroring ? "REMOTE PLAYER " + (instance == "a" ? "B" : "A") : "CO-OP TEST GUEST");
+                GUI.Box(new Rect(screenPoint.x - 70, Screen.height - screenPoint.y - 12, 140, 24), mirroring ? "REMOTE PLAYER" : "CO-OP TEST GUEST");
         }
-        if (remotePet != null && Camera.main != null) DrawEntityLabel(remotePet.transform.position, "REMOTE PET " + (instance == "a" ? "B" : "A"));
+        if (remotePet != null && Camera.main != null) DrawEntityLabel(remotePet.transform.position, "REMOTE PET");
         if (combatMonster != null && Camera.main != null) DrawEntityLabel(combatMonster.transform.position, "SHARED TEST MONSTER | HP " + CombatState().hp + " / " + CombatState().maxHp);
-        GUILayout.BeginArea(new Rect(12, 12, 440, 185), GUI.skin.box);
+        GUILayout.BeginArea(new Rect(12, 12, 440, 215), GUI.skin.box);
         GUILayout.Label("FATE CO-OP | Grove | instance " + instance.ToUpperInvariant() + " | isolated saves");
         GUILayout.Label(status);
         GUILayout.BeginHorizontal();
@@ -612,9 +559,15 @@ public sealed partial class Plugin : BaseUnityPlugin
         if (GUILayout.Button("Stop (F10)")) StopRoute();
         GUILayout.EndHorizontal();
         GUILayout.Label(movementSession ? "One test monster enabled; other monsters and loot protected." : "F11 hides this panel. Prototype test controls.");
-        if (movementSession && instance == "a" && SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && GUILayout.Button("Start / reset shared monster test"))
+        if (movementSession && isHost && SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && GUILayout.Button("Start / reset shared monster test"))
             try { StartCombat(); } catch (Exception e) { SetStatus(e.Message); }
-        GUILayout.Label(network != null && network.Connected ? "Local client connected" : "Local client waiting");
+        GUILayout.Label(link == null ? "Not in co-op." : (isHost ? "Hosting co-op: " : "Joined co-op: ") + (peerConnected ? "partner connected" : "waiting for partner"));
+        GUILayout.BeginHorizontal();
+        if (link == null && SteamReady && GUILayout.Button("Host Steam co-op"))
+            try { Execute("host-steam"); } catch (Exception e) { SetStatus(e.Message); }
+        if (link is SteamLink { CanInvite: true } steam && GUILayout.Button("Invite friend")) steam.Invite();
+        if (link != null && GUILayout.Button("Leave co-op")) EndSession("Left co-op.");
+        GUILayout.EndHorizontal();
         GUILayout.EndArea();
     }
 
@@ -623,7 +576,8 @@ public sealed partial class Plugin : BaseUnityPlugin
         SceneManager.sceneLoaded -= OnSceneLoaded;
         SceneLoad.OnSceneLoaded -= OnGameSceneLoaded;
         PlayerManager.OnPlayerSpawn -= OnPrimarySpawn;
-        network?.Dispose();
+        EndSession("Game closed.");
+        lobbyInvites?.Dispose();
         RestoreSessionSafety();
         ResetCombat();
         Despawn();
@@ -638,22 +592,11 @@ public sealed partial class Plugin : BaseUnityPlugin
         public bool primaryIdentityPreserved;
         public int aiCallsSuppressed;
     }
-    [Serializable] private sealed class Endpoint { public int protocolVersion = 1, port; public string token = ""; }
-    [Serializable] private sealed class NetworkReply
-    {
-        public bool ok, transitioning, groveReady, worldReady;
-        public float primaryYaw;
-        public string error = "", scene = "", worldKey = "", layoutHash = "";
-        public long sequence;
-        public int epoch, primaryId, guestId, depth;
-        public Vector3 guestPosition, primaryPosition;
-        public string petJson = "", combatJson = "", attackJson = "";
-    }
     [Serializable] private sealed class Telemetry
     {
         public float time;
-        public string scene = "", status = "", campaign = "", gameScene = "", layoutHash = "", worldKey = "";
-        public int primaryId, guestId, spawnedTotal, aiCallsSuppressed, prototypeActors, renderers, activeMeshes, meshesSeenByCamera, worldEpoch, dungeonDepth, networkAccepted, networkRejected;
+        public string scene = "", status = "", campaign = "", gameScene = "", layoutHash = "", worldKey = "", sessionRole = "";
+        public int primaryId, guestId, spawnedTotal, aiCallsSuppressed, prototypeActors, renderers, activeMeshes, meshesSeenByCamera, worldEpoch, dungeonDepth, networkAccepted, networkRejected, localPort;
         public Vector3 primaryPosition, guestPosition, guestVelocity;
         public bool guestOnNavMesh, guestWalking, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, movementSession;
         public string localPetJson = "";

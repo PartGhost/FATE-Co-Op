@@ -36,7 +36,7 @@ public sealed partial class Plugin
     {
         if (Active == null || !Active.movementSession) return true;
         if (__instance == Active.remotePet) return false;
-        if (__instance == Active.combatMonster && Active.instance == "a") return true;
+        if (__instance == Active.combatMonster && Active.isHost) return true;
         __instance.SetTarget(null);
         __instance.StopPathing();
         return false;
@@ -44,7 +44,7 @@ public sealed partial class Plugin
     private static void BeforeLoadFloor(LevelGenerator __instance)
     {
         var plugin = Active;
-        if (plugin?.pendingWorld == null || plugin.instance != "b") return;
+        if (plugin?.pendingWorld == null || plugin.isHost) return;
         var world = plugin.pendingWorld;
         if (__instance.GetLevelDepth() != world.floor.depth) return;
         var realm = SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove);
@@ -61,13 +61,13 @@ public sealed partial class Plugin
         if (transitioning) return "";
         if (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove) return "GroveTown";
         if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || layoutHash.Length == 0) return "";
-        return instance == "a" ? sessionId + ":" + worldEpoch + ":" + layoutHash : loadedWorldKey;
+        return isHost ? sessionId + ":" + worldEpoch + ":" + layoutHash : loadedWorldKey;
     }
     private void FinalizeWorld()
     {
         if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon) { joiningWorld = null; return; }
         layoutHash = Fingerprint(LevelGenerator.currentInstance);
-        if (instance == "b" && joiningWorld != null)
+        if (!isHost && joiningWorld != null)
         {
             if (layoutHash == joiningWorld.layoutHash) loadedWorldKey = joiningWorld.worldKey;
             else { loadedWorldKey = ""; Logger.LogError("HOST_LAYOUT_MISMATCH expected=" + joiningWorld.layoutHash + " actual=" + layoutHash); }
@@ -75,26 +75,18 @@ public sealed partial class Plugin
         }
         Logger.LogInfo("WORLD_LAYOUT " + layoutHash);
     }
-    private void ExportWorld()
+    private WorldSnapshot ExportWorld()
     {
-        if (instance != "a" || !SharedWorldReady() || SceneLoad.CurrentScene != Tableflip.Scene.Dungeon)
-            throw new InvalidOperationException("Only host A can export a ready dungeon.");
         var generator = LevelGenerator.currentInstance;
         generator.PreSaveTask(SaveData.CurrentSaveData);
         var floor = SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).GetDungeonSave(generator.GetLevelDepth());
-        var json = JsonUtility.ToJson(new WorldSnapshot { worldKey = CurrentWorldKey(), layoutHash = layoutHash, floor = floor });
-        File.WriteAllText(Path.Combine(controlRoot, "world-export.json"), json);
         Logger.LogInfo("HOST_WORLD_EXPORTED depth=" + floor.depth);
+        return new WorldSnapshot { worldKey = CurrentWorldKey(), layoutHash = layoutHash, floor = floor };
     }
-    private void JoinWorld(string checksum)
+    private void JoinWorld(WorldSnapshot snapshot)
     {
-        if (instance != "b" || Player.PlayerChar == null || Fate.CurrentFateVer != Fate.FateVer.Original)
-            throw new InvalidOperationException("Joining requires instance B's selected Original FATE character.");
-        var path = Path.Combine(controlRoot, "world-incoming.json");
-        var bytes = File.ReadAllBytes(path);
-        if (bytes.Length > 8 * 1024 * 1024 || !string.Equals(Hash(bytes), checksum, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Incoming world checksum or size is invalid.");
-        var snapshot = JsonUtility.FromJson<WorldSnapshot>(System.Text.Encoding.UTF8.GetString(bytes));
+        if (Player.PlayerChar == null || Fate.CurrentFateVer != Fate.FateVer.Original)
+            throw new InvalidOperationException("Joining requires a selected Original FATE character.");
         if (snapshot == null || snapshot.version != 1 || snapshot.floor == null || snapshot.floor.depth < 1 || snapshot.floor.depth > 10000
             || snapshot.floor.templateIndex < 0 || snapshot.floor.templateIndex >= SingletonBehaviour<FateDB>.Instance.allTemplates.Length
             || snapshot.layoutHash.Length != 64 || snapshot.worldKey.Length > 128 || snapshot.worldKey.Length == 0)
@@ -142,7 +134,7 @@ public sealed partial class Plugin
         if (!movementSession || Time.unscaledTime < nextSafetyUpdate) return;
         nextSafetyUpdate = Time.unscaledTime + 0.25f;
         foreach (var monster in UnityEngine.Object.FindObjectsOfType<Monster>())
-            if (monster != combatMonster || instance != "a") Protect(monster);
+            if (monster != combatMonster || !isHost) Protect(monster);
         if (Player.PlayerChar != null) Protect(Player.PlayerChar);
     }
     private void Protect(Character character)

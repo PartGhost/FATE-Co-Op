@@ -6,7 +6,7 @@
     <BepCore>../../tools/bepinex/BepInEx/core</BepCore>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../Shared/LoopbackProtocol.cs" Link="Transport/LoopbackProtocol.cs" />
+    <Reference Include="com.rlabrecque.steamworks.net"><HintPath>$(GameManaged)/com.rlabrecque.steamworks.net.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine"><HintPath>$(GameManaged)/UnityEngine.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="BepInEx.Core"><HintPath>$(BepCore)/BepInEx.Core.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="BepInEx.Unity.Mono"><HintPath>$(BepCore)/BepInEx.Unity.Mono.dll</HintPath><Private>false</Private></Reference>

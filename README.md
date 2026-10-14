@@ -1,10 +1,10 @@
 # FATE Co-Op development workspace
 
-Current milestone: two isolated game instances with replicated players and pets, host-provided Grove dungeon layouts, and one host-controlled shared test monster. The combat fixture uses fixed 10-damage hits; full combat, XP, loot and progression remain future milestones. Pickups and unrelated enemies are disabled during testing.
+Current milestone: Steam lobbies and a direct game-to-game link carrying replicated players and pets, host-provided Grove dungeon layouts, and one host-controlled shared test monster. The combat fixture uses fixed 10-damage hits; full combat, XP, loot and progression remain future milestones. Pickups and unrelated enemies are disabled during testing.
 
 See [the assessment](docs/feasibility.md) and [the current prototype guide](docs/prototype.md). The original Steam installation and save are protected. The mod is deployed only into the disposable `test-game` and `test-game-b` copies.
 
-- `src/`: the BepInEx movement prototype and offline sandbox patcher.
+- `src/`: the BepInEx co-op prototype and offline sandbox patcher.
 - `docs/`: findings and prototype acceptance criteria.
 - `research/`: local-only ILSpy output from the installed game, excluded from version control.
 - `tools/`: local inspection tools and repeatable inspection script.

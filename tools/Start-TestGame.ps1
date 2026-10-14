@@ -22,7 +22,7 @@ if (Test-Path -LiteralPath $oldQueue) {
         Move-Item -LiteralPath $command.FullName -Destination (Join-Path $archive ('commands\' + $command.Name))
     }
 }
-foreach ($name in @('status.json','telemetry.jsonl','route-result.json','primary-walk-result.json','verification.json','network-result.json','lifecycle-result.json','endpoint.json','Player.log')) {
+foreach ($name in @('status.json','telemetry.jsonl','route-result.json','primary-walk-result.json','verification.json','lifecycle-result.json','Player.log')) {
     $previous = Join-Path $runtime $name
     if (Test-Path -LiteralPath $previous) { Move-Item -LiteralPath $previous -Destination (Join-Path $archive $name) }
 }

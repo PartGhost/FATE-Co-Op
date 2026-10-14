@@ -1,7 +1,5 @@
 using System;
-using System.IO;
 using System.Linq;
-using System.Text;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
@@ -21,13 +19,6 @@ public sealed partial class Plugin
         public Vector3 position;
         public float yaw;
     }
-    [Serializable] private sealed class PeerFrame
-    {
-        public string worldKey = "";
-        public Vector3 primaryPosition = Vector3.zero;
-        public float primaryYaw = 0;
-        public string petJson = "", combatJson = "", attackJson = "";
-    }
     private void InstallEntityHooks()
     {
         harmony!.Patch(AccessTools.Method(typeof(Pet), "UpdateAI"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePetAI)));
@@ -40,13 +31,8 @@ public sealed partial class Plugin
         if (pet == null || !pet.gameObject.activeInHierarchy || pet.monsterData == null) return new PetSnapshot();
         return new PetSnapshot { present = true, model = pet.monsterData.displayName, name = pet.CharacterName ?? "Pet", position = pet.transform.position, yaw = pet.transform.eulerAngles.y };
     }
-    private void ApplyPeerFrame(string checksum)
+    private void ApplyPeerFrame(PeerFrame frame)
     {
-        if (!SharedWorldReady()) throw new InvalidOperationException("Peer frame requires a ready shared world.");
-        var bytes = File.ReadAllBytes(Path.Combine(controlRoot, "peer-incoming.json"));
-        if (bytes.Length > 65536 || !string.Equals(Hash(bytes), checksum, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Peer frame checksum or size is invalid.");
-        var frame = JsonUtility.FromJson<PeerFrame>(Encoding.UTF8.GetString(bytes));
-        if (frame == null || frame.worldKey != CurrentWorldKey()) throw new InvalidOperationException("Peer frame belongs to a different world.");
         if (!FinitePosition(frame.primaryPosition) || !Finite(frame.primaryYaw)) throw new InvalidOperationException("Invalid player pose.");
         if (!NavMesh.SamplePosition(frame.primaryPosition, out var hit, 2f, NavMesh.AllAreas)) throw new InvalidOperationException("Remote player is outside the navigation mesh.");
         if (actor == null) Spawn();
@@ -54,7 +40,7 @@ public sealed partial class Plugin
         mirrorTarget = hit.position; mirrorYaw = frame.primaryYaw; lastMirrorTime = Time.unscaledTime; mirroring = true;
         var pet = JsonUtility.FromJson<PetSnapshot>(frame.petJson);
         ApplyRemotePet(pet);
-        if (instance == "a") ApplyRemoteAttack(string.IsNullOrEmpty(frame.attackJson) ? null : JsonUtility.FromJson<AttackIntent>(frame.attackJson), pet);
+        if (isHost) ApplyRemoteAttack(string.IsNullOrEmpty(frame.attackJson) ? null : JsonUtility.FromJson<AttackIntent>(frame.attackJson), pet);
         else ApplyCombatSnapshot(JsonUtility.FromJson<CombatSnapshot>(frame.combatJson));
     }
     private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
