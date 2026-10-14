@@ -54,7 +54,7 @@ internal sealed class SteamLink : IPeerLink
     {
         if (ioFailure || result.m_eResult != EResult.k_EResultOK) { failure = "Steam lobby creation failed: " + result.m_eResult; return; }
         lobby = new CSteamID(result.m_ulSteamIDLobby);
-        SteamMatchmaking.SetLobbyData(lobby, VersionKey, Plugin.Version);
+        SteamMatchmaking.SetLobbyData(lobby, VersionKey, Plugin.Compatibility);
         report("Steam lobby ready. Invite a friend with Shift+Tab or the Invite button.");
     }
 
@@ -64,7 +64,7 @@ internal sealed class SteamLink : IPeerLink
         lobby = new CSteamID(result.m_ulSteamIDLobby);
         if (ioFailure || result.m_EChatRoomEnterResponse != (uint)EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess) { failure = "Could not join the Steam lobby: " + (EChatRoomEnterResponse)result.m_EChatRoomEnterResponse; return; }
         var version = SteamMatchmaking.GetLobbyData(lobby, VersionKey);
-        if (version != Plugin.Version) { failure = "Host runs co-op mod " + version + ", this game runs " + Plugin.Version + "."; return; }
+        if (version != Plugin.Compatibility) { failure = "The host runs " + version + ", this game runs " + Plugin.Compatibility + "."; return; }
         peer = SteamMatchmaking.GetLobbyOwner(lobby);
         report("Joined " + SteamFriends.GetFriendPersonaName(peer) + "'s lobby.");
     }

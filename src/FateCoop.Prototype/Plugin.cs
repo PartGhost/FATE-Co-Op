@@ -43,6 +43,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private void Awake()
     {
+        var sandboxVerified = false;
         try
         {
             var game = Path.GetFullPath(Paths.GameRootPath);
@@ -55,6 +56,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             var actual = (string)AccessTools.Method(typeof(Tivola.Framework.SaveManagerStandalone), "GetFilePath").Invoke(backend, new object[] { "isolation-check" });
             if (!string.Equals(Path.GetDirectoryName(actual), expected, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Save isolation check failed: " + actual);
+            sandboxVerified = true;
             runningLock = new FileStream(Path.Combine(game, "fate-coop-running.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             controlRoot = Path.Combine(workspace, "artifacts", instance == "a" ? "runtime" : "runtime-b");
             Directory.CreateDirectory(Path.Combine(controlRoot, "commands"));
@@ -83,6 +85,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         {
             Logger.LogError(exception);
             enabled = false;
+            if (!sandboxVerified) Application.Quit();
         }
     }
 

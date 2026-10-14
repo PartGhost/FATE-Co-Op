@@ -32,6 +32,7 @@ public sealed partial class Plugin
         public string petJson = "", combatJson = "", attackJson = "";
     }
 
+    internal static string Compatibility => Version + "/" + Application.version;
     private static bool SteamReady => AccessTools.StaticFieldRefAccess<SteamManager, bool>("s_EverInitialized");
 
     private static ulong LobbyFromCommandLine()
@@ -95,7 +96,7 @@ public sealed partial class Plugin
 
     private void Send(string type, string body)
     {
-        var bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(new Envelope { version = Version, type = type, body = body }));
+        var bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(new Envelope { version = Compatibility, type = type, body = body }));
         if (bytes.Length > MaxMessageBytes) { Logger.LogError($"PEER_MESSAGE_TOO_LARGE type={type} bytes={bytes.Length}"); return; }
         link!.Send(bytes);
     }
@@ -103,9 +104,9 @@ public sealed partial class Plugin
     private void Receive(byte[] bytes)
     {
         var envelope = JsonUtility.FromJson<Envelope>(Encoding.UTF8.GetString(bytes));
-        if (envelope == null || envelope.version != Version)
+        if (envelope == null || envelope.version != Compatibility)
         {
-            EndSession("Your partner runs a different co-op mod version (" + envelope?.version + ").");
+            EndSession("Your partner runs a different mod or game version (" + envelope?.version + ", this game runs " + Compatibility + ").");
             return;
         }
         lastPeerMessage = Time.unscaledTime;
