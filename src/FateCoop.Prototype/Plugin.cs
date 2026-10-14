@@ -566,6 +566,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             guestOnNavMesh = agent != null && agent.isOnNavMesh, guestVelocity = agent != null ? agent.velocity : Vector3.zero,
             guestWalking = animator != null && animator.GetBool("IsWalking"), spawnedTotal = spawnCount,
             aiCallsSuppressed = suppressedAI, saveLoaded = SaveData.HasLoaded,
+            steamInitialized = AccessTools.StaticFieldRefAccess<SteamManager, bool>("s_EverInitialized"),
             campaign = Fate.CurrentFateVer.ToString(), renderers = renderers.Length,
             worldEpoch = worldEpoch, transitioning = transitioning, dungeonDepth = LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth() : 0,
             networkConnected = network != null && network.Connected, networkAccepted = networkAccepted, networkRejected = networkRejected,
@@ -654,7 +655,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         public string scene = "", status = "", campaign = "", gameScene = "", layoutHash = "", worldKey = "";
         public int primaryId, guestId, spawnedTotal, aiCallsSuppressed, prototypeActors, renderers, activeMeshes, meshesSeenByCamera, worldEpoch, dungeonDepth, networkAccepted, networkRejected;
         public Vector3 primaryPosition, guestPosition, guestVelocity;
-        public bool guestOnNavMesh, guestWalking, saveLoaded, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, movementSession;
+        public bool guestOnNavMesh, guestWalking, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, movementSession;
         public string localPetJson = "";
         public int remotePetId, remotePetActors, localPetCount, remotePetMeshes;
         public Vector3 remotePetPosition;

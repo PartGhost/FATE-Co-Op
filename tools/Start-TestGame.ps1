@@ -4,7 +4,7 @@ $workspace = Split-Path -Parent $PSScriptRoot
 $game = Join-Path $workspace $(if ($Instance -eq 'a') { 'test-game' } else { 'test-game-b' })
 $manifest = Get-Content -LiteralPath (Join-Path $game 'fate-coop-sandbox.json') -Raw | ConvertFrom-Json
 $expectedSave = Join-Path $workspace ('test-saves\instance-' + $Instance)
-if ($manifest.saveDirectory -ne $expectedSave -or !$manifest.steamDisabled) { throw 'Sandbox manifest is invalid.' }
+if ($manifest.saveDirectory -ne $expectedSave) { throw 'Sandbox manifest is invalid.' }
 foreach ($assembly in $manifest.assemblies) {
     $actual = Get-FileHash -LiteralPath (Join-Path $game ('FateReawakened_Data\Managed\' + $assembly.assembly))
     if ($actual.Hash -ne $assembly.sha256) { throw ('Sandbox assembly hash mismatch: ' + $assembly.assembly) }
@@ -26,6 +26,10 @@ foreach ($name in @('status.json','telemetry.jsonl','route-result.json','primary
     $previous = Join-Path $runtime $name
     if (Test-Path -LiteralPath $previous) { Move-Item -LiteralPath $previous -Destination (Join-Path $archive $name) }
 }
+$steamApps = Join-Path (Get-ItemProperty 'HKCU:\Software\Valve\Steam').SteamPath 'steamapps'
+$appManifest = Get-ChildItem -LiteralPath $steamApps -Filter 'appmanifest_*.acf' | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match '"installdir"\s+"FATE Reawakened"' }
+if (!$appManifest) { throw 'FATE Reawakened Steam manifest not found.' }
+$env:SteamAppId = $appManifest.BaseName.Substring('appmanifest_'.Length)
 $log = Join-Path $runtime 'Player.log'
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
 $arguments = '-screen-fullscreen 0 -screen-width 960 -screen-height 540 -logFile "' + $log + '"'

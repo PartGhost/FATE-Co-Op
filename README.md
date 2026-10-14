@@ -11,4 +11,4 @@ See [the assessment](docs/feasibility.md) and [the current prototype guide](docs
 
 Local tools include ILSpyCmd 9.1.0.7988, portable .NET SDK 8.0.425, Mono.Cecil 0.11.6, and BepInEx 6.0.0-be.788 with bundled Harmony. Builds use local references and the offline NuGet configuration.
 
-Do not distribute game assemblies, decompiled game sources, or personal saves. The offline patcher redirects game-owned persistent paths to `test-saves/instance-a`, namespaces PlayerPrefs calls, and disables Steam initialization in the test copy. The launcher verifies patched assembly hashes before running.
+Do not distribute game assemblies, decompiled game sources, or personal saves. The offline patcher redirects game-owned persistent paths to `test-saves/instance-a`, and namespaces PlayerPrefs calls. Steam stays enabled for invites and networking. The launcher verifies patched assembly hashes before running.

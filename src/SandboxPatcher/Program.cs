@@ -33,21 +33,8 @@ foreach (var name in new[] { "Assembly-CSharp.dll", "Assembly-CSharp-firstpass.d
     module.Types.Add(wrapperType);
     var persistentCount = 0;
     var prefsCount = 0;
-    var steamCount = 0;
     foreach (var method in methods)
     {
-        // The disposable prototype operates without Steam API initialization or achievements.
-        if (method.DeclaringType.FullName == "SteamManager" && method.Body.Instructions.Any(i =>
-            i.Operand is MethodReference mr && mr.DeclaringType.Namespace.StartsWith("Steamworks", StringComparison.Ordinal)))
-        {
-            method.Body = new MethodBody(method);
-            var il = method.Body.GetILProcessor();
-            if (method.ReturnType.MetadataType == MetadataType.Boolean) il.Emit(OpCodes.Ldc_I4_0);
-            else if (method.ReturnType.MetadataType != MetadataType.Void) throw new InvalidOperationException("Unhandled Steam return type.");
-            il.Emit(OpCodes.Ret);
-            steamCount++;
-            continue;
-        }
         foreach (var instruction in method.Body.Instructions)
         {
             if (instruction.Operand is not MethodReference reference) continue;
@@ -88,8 +75,8 @@ foreach (var name in new[] { "Assembly-CSharp.dll", "Assembly-CSharp-firstpass.d
             }
         }
     }
-    if (name == "Assembly-CSharp.dll" && (persistentCount == 0 || steamCount == 0))
-        throw new InvalidOperationException("Expected save and Steam patch points missing; refusing deployment.");
+    if (name == "Assembly-CSharp.dll" && persistentCount == 0)
+        throw new InvalidOperationException("Expected save patch points missing; refusing deployment.");
     var staged = file + ".sandbox";
     assembly.Write(staged);
     using (var verify = AssemblyDefinition.ReadAssembly(staged))
@@ -102,9 +89,9 @@ foreach (var name in new[] { "Assembly-CSharp.dll", "Assembly-CSharp-firstpass.d
             throw new InvalidOperationException("Save backend did not receive the isolated path.");
     }
     File.Move(staged, file, true);
-    report.Add(new { assembly = name, persistentCount, prefsCount, steamCount, sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file))) });
+    report.Add(new { assembly = name, persistentCount, prefsCount, sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file))) });
 }
-var manifest = JsonSerializer.Serialize(new { saveDirectory = saves, playerPrefsPrefix = prefsPrefix, steamDisabled = true, assemblies = report }, new JsonSerializerOptions { WriteIndented = true });
+var manifest = JsonSerializer.Serialize(new { saveDirectory = saves, playerPrefsPrefix = prefsPrefix, assemblies = report }, new JsonSerializerOptions { WriteIndented = true });
 File.WriteAllText(Path.Combine(game, "fate-coop-sandbox.json"), manifest);
 Console.WriteLine(manifest);
 
