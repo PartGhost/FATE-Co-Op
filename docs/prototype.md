@@ -1,3 +1,19 @@
+# Grove co-op prototype — 0.13.0
+
+## Shared visuals, partner HUD and fishing
+
+- **Weapon glow.** The replica is built with the partner's real equipment, so `EquipmentHandle.SetEquipment` adds the same elemental and unique particles. The profile now also carries `activeWeaponSet`, so a partner on their secondary set shows the right weapon. Changing set rebuilds the replica.
+- **Effect particles.** Each frame lists the player's active effects that have a `PS_<name>` prefab, and the host's monster states list each monster's effects. The receiver adds or removes the same particles on the replica or monster copy with the game's own `AddPSEffect`/`RemovePSEffect`. This covers buffs, poison, freeze, potions and equipment auras, and it stays correct after a respawn or rejoin.
+- **Damage numbers.** The host reports final damage on shared monsters (`pop`). The guest shows it through the game's own `ThatHurtTrigger.OnHurt` on its copy, so a guest's hits now show numbers.
+- **Spells.** Each player's spell release (`CompleteSpell`: spell, aim point, target) is replayed by their replica with full visuals: cast glow, projectiles, impacts. It runs inside a visual-only scope. `AddEffect` gets a detached result, `RespondToAttack` and barrel breaking are skipped, camera shake is skipped, mana is topped up, and the master link is cleared during the call. Projectile impacts check whether their caster is a stand-in.
+- **Arrow trails and level-ups.** A ranged trail's end point is sent and drawn from the replica's weapon. A level-up plays the game's level-up particle on the replica.
+- **Fishing.** Fishing is local to each player (spots never run out, catches are personal), so both can fish at once. Each frame carries fishing, bite, pull and caught flags. The replica plays the matching animator states, holds a copy of the local player's fishing pole, hides its weapons, and plays the fishing sounds where it stands. A guest pulled to the host's next floor while fishing gets its fishing screen closed first (it used to stay stuck open).
+- **Partner HUD.** Bottom-left: the partner's Steam name, level, where they are (Grove town, floor, travelling, down), health and mana with numbers, an XP bar, and their pet's name and health. The pet label in the world stays the pet's own name.
+
+`Test-SharedVisuals.ps1` checks weapon glow (matching particle counts), a player aura and a monster aura, guest damage numbers, spells both ways, an arrow trail, a level-up, and both players fishing at once. All seven suites pass.
+
+Not covered yet: monster spell visuals on the guest's copies (their damage arrives; the projectile isn't drawn), and Elite/Legendary rank auras on monsters the guest spawns from host updates.
+
 # Grove co-op prototype — 0.12.0
 
 ## Co-op monster toughness

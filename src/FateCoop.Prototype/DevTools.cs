@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -124,6 +125,41 @@ public sealed partial class Plugin
             case "test-effect-partner":
                 if (!isHost || actor == null) throw new InvalidOperationException("test-effect-partner needs the host with a connected partner.");
                 actor.AddEffect(TestBlast(), 1, NearestEnemy(actor.transform.position) ?? throw new InvalidOperationException("No enemy near the partner."));
+                break;
+            case "test-glow":
+                var glowing = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
+                var weapon = glowing.activeWeapon ?? throw new InvalidOperationException("No weapon equipped.");
+                if (weapon.damageBonuses == null) weapon.damageBonuses = new List<ElementAmount>();
+                weapon.damageBonuses.Add(new ElementAmount { type = DamageType.Fire, value = 5 });
+                (weapon.IsInMainHand ? glowing.rightWeaponHandle : glowing.leftWeaponHandle).SetEquipment(weapon);
+                break;
+            case "test-aura":
+                var aura = new EffectData(EffectType.PercentSpeed, positive: true, ActivationType.Usage, 30, 0, 0f) { name = "Weapon_Fire" };
+                if (parts.Length > 1 && parts[1] == "monster") (NearestEnemy(Player.PlayerChar.transform.position) ?? throw new InvalidOperationException("No enemy.")).AddEffect(aura, 1, null);
+                else Player.PlayerChar.AddEffect(aura, 1, null);
+                break;
+            case "test-cast":
+                var mage = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
+                var spellTarget = NearestEnemy(mage.transform.position) ?? throw new InvalidOperationException("No enemy to cast at.");
+                var castSpell = SingletonBehaviour<FateDB>.Instance.allSpells.FirstOrDefault(s => s != null && s.sphereType == SpellSphere.Attack) ?? throw new InvalidOperationException("No attack spell.");
+                mage.mana = mage.MaxMana();
+                mage.stamina = mage.MaxStamina();
+                mage.CompleteSpell(spellTarget.transform.position, null, spellTarget, null, castSpell);
+                break;
+            case "test-arrow":
+                var archer = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
+                var trail = Object.Instantiate(SingletonBehaviour<FateDB>.Instance.rangedAttackLineRendererFallbackPrefab, archer.transform);
+                trail.positionCount = 2;
+                trail.SetPosition(0, archer.transform.position + Vector3.up);
+                trail.SetPosition(1, archer.transform.position + archer.transform.forward * 8f + Vector3.up);
+                archer.StartCoroutine((IEnumerator)ArrowFadeMethod.Invoke(archer, new object[] { trail }));
+                break;
+            case "test-levelup":
+                var learner = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
+                learner.AwardExperience(50000, fromMaster: false);
+                break;
+            case "test-fish":
+                ((Player)(Player.PlayerChar ?? throw new InvalidOperationException("No primary character."))).SetIsFishing(parts.Length < 2 || parts[1] != "off");
                 break;
             case "test-calm":
                 if (aggroMonster != null && !aggroMonster.MyVitals.IsDead)
@@ -338,7 +374,9 @@ public sealed partial class Plugin
             trackedHp = Mathf.RoundToInt(monsters.Values.Where(m => m != null).Sum(m => m.hp)), trackedDead = monsters.Values.Count(m => m != null && m.MyVitals.IsDead),
             hitsSent = hitsSent, hitsApplied = hitsApplied, strikesSent = strikesSent, strikesTaken = strikesTaken, killsSent = killsSent, killsTaken = killsTaken,
             swingsPlayed = swingsPlayed, castsPlayed = castsPlayed, groundItems = ground.Count(entry => entry.Value != null && (!isHost || announcedGround.Contains(entry.Key))),
-            lootGiven = lootGiven, lootTaken = lootTaken, questRewardsSent = questRewardsSent, questRewardsTaken = questRewardsTaken, effectsSent = effectsSent, effectsTaken = effectsTaken, partyQuests = partyQuests, dropsSent = dropsSent, bagItems = host != null ? host.inventory.Count : 0,
+            lootGiven = lootGiven, lootTaken = lootTaken, questRewardsSent = questRewardsSent, questRewardsTaken = questRewardsTaken, effectsSent = effectsSent, effectsTaken = effectsTaken, damagePopups = damagePopups, spellsReplayed = spellsReplayed, arrowsDrawn = arrowsDrawn, levelUpsPlayed = levelUpsPlayed,
+            remoteEffects = actor != null && shownEffects.TryGetValue(actor, out var actorEffects) ? string.Join(",", actorEffects) : "", mirrorEffects = shownEffects.Where(entry => entry.Key is Monster).Sum(entry => entry.Value.Count),
+            replicaFishing = replicaFishing, localFishing = LocalFishing(), localWeaponParticles = WeaponParticles(host), replicaWeaponParticles = WeaponParticles(actor), partyQuests = partyQuests, dropsSent = dropsSent, bagItems = host != null ? host.inventory.Count : 0,
             openChests = UnityEngine.Object.FindObjectsOfType<ContainerInteractable>().Count(c => c.IsOpen), brokenBarrels = UnityEngine.Object.FindObjectsOfType<ContainerDestroyable>().Count(b => b.IsDestroyed), primaryHp = host != null ? host.hp : 0f, primaryExperience = host != null ? (long)host.experience : 0,
             primaryOnNavMesh = host != null && host.GetComponent<NavMeshAgent>() != null && host.GetComponent<NavMeshAgent>().isOnNavMesh,
             gameScene = SceneLoad.CurrentScene.ToString(),
@@ -367,8 +405,8 @@ public sealed partial class Plugin
         public int remotePetId, remotePetActors, localPetCount, remotePetMeshes;
         public Vector3 remotePetPosition;
         public string remotePetModel = "";
-        public string remoteName = "", aggro = "", partyQuests = "";
-        public int monstersTracked, worldMonsters, trackedHp, trackedDead, hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, swingsPlayed, castsPlayed, groundItems, lootGiven, lootTaken, questRewardsSent, questRewardsTaken, effectsSent, effectsTaken, dropsSent, bagItems, openChests, brokenBarrels;
+        public string remoteName = "", aggro = "", partyQuests = "", remoteEffects = "";
+        public int monstersTracked, worldMonsters, trackedHp, trackedDead, hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, swingsPlayed, castsPlayed, groundItems, lootGiven, lootTaken, questRewardsSent, questRewardsTaken, effectsSent, effectsTaken, damagePopups, spellsReplayed, arrowsDrawn, levelUpsPlayed, mirrorEffects, replicaFishing, localFishing, localWeaponParticles, replicaWeaponParticles, dropsSent, bagItems, openChests, brokenBarrels;
         public float primaryHp;
         public long primaryExperience;
     }

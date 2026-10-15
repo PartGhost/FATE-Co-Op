@@ -84,6 +84,7 @@ public sealed partial class Plugin
 
     private static bool BeforeBarrelBreak(ContainerDestroyable __instance)
     {
+        if (Active != null && Active.VisualOnly) return false;
         if (!GuestInHostWorld || __instance.IsDestroyed) return true;
         Active!.RequestFixture("b", __instance.transform.position);
         return false;

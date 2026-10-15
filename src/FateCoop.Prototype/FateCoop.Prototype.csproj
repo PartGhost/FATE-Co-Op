@@ -19,6 +19,8 @@
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(GameManaged)/UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.InputSystem"><HintPath>$(GameManaged)/Unity.InputSystem.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.JSONSerializeModule"><HintPath>$(GameManaged)/UnityEngine.JSONSerializeModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.ParticleSystemModule"><HintPath>$(GameManaged)/UnityEngine.ParticleSystemModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(GameManaged)/UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(GameManaged)/UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 </Project>

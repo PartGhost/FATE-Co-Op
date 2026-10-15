@@ -79,6 +79,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallCombatHooks();
             InstallLootHooks();
             InstallQuestHooks();
+            InstallVisualHooks();
             commandLineLobby = LobbyFromArguments(Environment.GetCommandLineArgs());
             SetStatus("Ready.");
             Logger.LogInfo("ISOLATION_OK " + actual);
@@ -303,6 +304,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private void Despawn(bool preserveIntent = false)
     {
+        ForgetShownEffects();
         DespawnRemotePet();
         if (!preserveIntent) guestWanted = false;
         StopRoute();
@@ -315,7 +317,10 @@ public sealed partial class Plugin : BaseUnityPlugin
             Logger.LogInfo("DESPAWN_OK " + old.GetInstanceID());
         }
         primary = null;
-        remoteSwings = remoteCasts = -1;
+        remoteSwings = remoteCasts = remoteArrows = remoteLevelUps = remoteSpells = -1;
+        replicaFishing = 0;
+        replicaPole = null;
+        replicaArrow = null;
     }
 
     private void SetStatus(string text) { status = text; Logger.LogInfo(text); }
@@ -338,6 +343,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             }
         }
         if (remotePet != null && Camera.main != null) DrawEntityLabel(remotePet.transform.position, remotePet.CharacterName);
+        DrawPartnerFrame();
         GUILayout.BeginArea(new Rect(12, 12, 440, 150), GUI.skin.box);
         GUILayout.Label("FATE CO-OP " + Version + (testTools ? " | instance " + instance.ToUpperInvariant() : ""));
         GUILayout.Label(status);

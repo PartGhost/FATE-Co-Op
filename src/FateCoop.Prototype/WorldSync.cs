@@ -96,6 +96,7 @@ public sealed partial class Plugin
             throw new InvalidOperationException("Incoming world metadata is invalid.");
         // Clone only the world record; the joiner's player, inventory and pet records remain their own.
         pendingWorld = snapshot;
+        if (SimpleSingletonBehaviour<PlayerUI>.Instance.IsFishing) SimpleSingletonBehaviour<PlayerUI>.Instance.HideFishingUI();
         Player.latestStairsUsedWasDown = true;
         Player.isComingFromMenu = false;
         Player.isEnteringDungeonFromTownDoor = true;

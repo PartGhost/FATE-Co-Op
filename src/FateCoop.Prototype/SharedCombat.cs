@@ -36,7 +36,7 @@ public sealed partial class Plugin
     {
         internal const int Walking = 1, Running = 2, Attacking = 4, Dead = 8;
         internal int Id, Flags;
-        internal string Key = "";
+        internal string Key = "", Effects = "";
         internal Vector3 Position;
         internal float Yaw, Hp, MaxHp;
         internal bool Gone;
@@ -47,23 +47,23 @@ public sealed partial class Plugin
             var flags = monster.MyVitals.IsDead ? Dead : 0;
             if (animator != null)
                 flags |= (animator.GetBool("IsWalking") ? Walking : 0) | (animator.GetBool("IsRunning") ? Running : 0) | (animator.GetBool("IsAttacking") ? Attacking : 0);
-            return new MonsterState { Id = id, Key = monster.monsterData.displayName, Position = monster.transform.position, Yaw = monster.transform.eulerAngles.y, Hp = monster.hp, MaxHp = monster.MaxHP(), Flags = flags };
+            return new MonsterState { Id = id, Key = monster.monsterData.displayName, Position = monster.transform.position, Yaw = monster.transform.eulerAngles.y, Hp = monster.hp, MaxHp = monster.MaxHP(), Flags = flags, Effects = ActiveEffectNames(monster) };
         }
 
-        internal bool Differs(MonsterState other) => Flags != other.Flags || Math.Abs(Hp - other.Hp) > 0.01f || Math.Abs(MaxHp - other.MaxHp) > 0.01f
+        internal bool Differs(MonsterState other) => Flags != other.Flags || Effects != other.Effects || Math.Abs(Hp - other.Hp) > 0.01f || Math.Abs(MaxHp - other.MaxHp) > 0.01f
             || (Position - other.Position).sqrMagnitude > 0.0025f || Math.Abs(Mathf.DeltaAngle(Yaw, other.Yaw)) > 2f;
 
-        internal string Encode() => string.Join("|", Id.ToString(CultureInfo.InvariantCulture), Key, Number(Position.x), Number(Position.y), Number(Position.z), Number(Yaw), Number(Hp), Number(MaxHp), Flags.ToString(CultureInfo.InvariantCulture));
+        internal string Encode() => string.Join("|", Id.ToString(CultureInfo.InvariantCulture), Key, Number(Position.x), Number(Position.y), Number(Position.z), Number(Yaw), Number(Hp), Number(MaxHp), Flags.ToString(CultureInfo.InvariantCulture), Effects);
 
         internal static MonsterState Decode(string line)
         {
             var parts = line.Split('|');
             if (parts.Length == 2 && parts[1] == "-") return new MonsterState { Id = ParseInt(parts[0]), Gone = true };
-            if (parts.Length != 9 || parts[1].Length == 0 || parts[1].Length > 128) throw new InvalidOperationException("Invalid monster state.");
+            if (parts.Length != 10 || parts[1].Length == 0 || parts[1].Length > 128 || parts[9].Length > 1000) throw new InvalidOperationException("Invalid monster state.");
             var state = new MonsterState
             {
                 Id = ParseInt(parts[0]), Key = parts[1], Position = new Vector3(ParseFloat(parts[2]), ParseFloat(parts[3]), ParseFloat(parts[4])),
-                Yaw = ParseFloat(parts[5]), Hp = ParseFloat(parts[6]), MaxHp = ParseFloat(parts[7]), Flags = ParseInt(parts[8])
+                Yaw = ParseFloat(parts[5]), Hp = ParseFloat(parts[6]), MaxHp = ParseFloat(parts[7]), Flags = ParseInt(parts[8]), Effects = parts[9]
             };
             if (!FinitePosition(state.Position) || state.Hp < 0 || state.MaxHp <= 0 || state.MaxHp > 1000000) throw new InvalidOperationException("Invalid monster state values.");
             return state;
@@ -123,6 +123,11 @@ public sealed partial class Plugin
     {
         var plugin = Active;
         if (plugin == null || !plugin.sharedSession) return true;
+        if (plugin.VisualOnly)
+        {
+            __result = new AppliedEffect(effect, sourceLevel, source, itemSlotIndex, isSpellEffect);
+            return false;
+        }
         var mirrorId = 0;
         var proxy = __instance == plugin.actor || __instance == plugin.remotePet || (!plugin.isHost && __instance is Monster mirror && plugin.monsterIds.TryGetValue(mirror, out mirrorId));
         if (!proxy) return true;
@@ -261,6 +266,7 @@ public sealed partial class Plugin
 
     private void ResetMonsters()
     {
+        foreach (var monster in monsters.Values) shownEffects.Remove(monster);
         monsters.Clear();
         monsterIds.Clear();
         monsterStates.Clear();
@@ -349,6 +355,7 @@ public sealed partial class Plugin
             monsterStates[state.Id] = state;
             monster.maxHpBase = Mathf.RoundToInt(state.MaxHp);
             monster.hp = state.Hp;
+            ShowEffects(monster, state.Effects);
             if ((state.Flags & MonsterState.Dead) != 0 && !monster.MyVitals.IsDead) ConfirmDeath(monster);
         }
     }
@@ -504,6 +511,7 @@ public sealed partial class Plugin
         var spell = SingletonBehaviour<FateDB>.Instance.allSpells.FirstOrDefault(s => s != null && s.spellName == spellName);
         if (spell == null) throw new InvalidOperationException("Unknown spell: " + spellName);
         actor.activeSpell = spell;
+        PlayReplicaCastGlow(spell);
         actor.Cast();
         castsPlayed++;
     }

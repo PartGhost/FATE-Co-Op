@@ -9,7 +9,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.12.0";
+    internal const string Version = "0.13.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     private const float FrameInterval = 0.05f, PeerTimeout = 10f;
     private IPeerLink? link;
@@ -29,9 +29,10 @@ public sealed partial class Plugin
     {
         public string worldKey = "", scene = "";
         public Vector3 primaryPosition = Vector3.zero;
-        public float primaryYaw = 0, swingSpeed = 0;
-        public int swings, casts, hp, maxHp, mana, maxMana;
-        public string petJson = "", castSpell = "";
+        public float primaryYaw = 0, swingSpeed = 0, xpPercent = 0;
+        public int swings, casts, hp, maxHp, mana, maxMana, level, depth, fishing, arrows, levelUps, spells, spellTarget;
+        public Vector3 arrowEnd, spellAim;
+        public string petJson = "", castSpell = "", effects = "", spellName = "";
     }
 
     internal static string Compatibility => Version + "/" + Application.version;
@@ -107,7 +108,10 @@ public sealed partial class Plugin
             worldKey = SharedWorldReady() ? CurrentWorldKey() : "", scene = SceneLoad.CurrentScene.ToString(),
             primaryPosition = host != null ? host.transform.position : Vector3.zero, primaryYaw = host != null ? host.transform.eulerAngles.y : 0f,
             hp = host != null ? host.HP() : 0, maxHp = host != null ? host.MaxHP() : 0, mana = host != null ? host.Mana() : 0, maxMana = host != null ? host.MaxMana() : 0,
-            petJson = JsonUtility.ToJson(LocalPetSnapshot()), swings = localSwings, swingSpeed = localSwingSpeed, casts = localCasts, castSpell = localCastSpell
+            level = host != null ? host.Level : 0, xpPercent = host != null ? host.GetPctToNextLevel() : 0f, depth = LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth() : 0,
+            petJson = JsonUtility.ToJson(LocalPetSnapshot()), swings = localSwings, swingSpeed = localSwingSpeed, casts = localCasts, castSpell = localCastSpell,
+            effects = host != null ? ActiveEffectNames(host) : "", fishing = LocalFishing(), arrows = localArrows, arrowEnd = localArrowEnd, levelUps = CountLevelUps(),
+            spells = localSpells, spellName = localSpellName, spellAim = localSpellAim, spellTarget = localSpellTarget
         };
     }
 
@@ -155,6 +159,7 @@ public sealed partial class Plugin
                 case "hurt": TakeHurt(envelope.body); break;
                 case "effect": TakeEffect(envelope.body); break;
                 case "kill": TakeKill(envelope.body); break;
+                case "pop": ShowDamagePopup(envelope.body); break;
                 case "ground": ReceiveGround(envelope.body); break;
                 case "ground-gone": ReceiveGroundGone(envelope.body); break;
                 case "take": GiveTake(envelope.body); break;
@@ -219,6 +224,7 @@ public sealed partial class Plugin
         if (!isHost) loadedWorldKey = "";
         remoteFrame = null;
         remoteProfileJson = "";
+        partnerName = "";
         partyQuests = "";
         requestedWorld = "";
     }

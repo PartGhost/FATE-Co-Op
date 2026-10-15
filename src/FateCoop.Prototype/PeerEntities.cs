@@ -14,7 +14,7 @@ public sealed partial class Plugin
     private string remotePetModel = "";
     private Vector3 remotePetTarget;
     private float remotePetYaw, remotePetTime;
-    private string remoteProfileJson = "", sentProfileKey = "";
+    private string remoteProfileJson = "", sentProfileKey = "", partnerName = "";
     private float nextProfileCheck, localSwingSpeed;
     private int localSwings, localCasts, remoteSwings = -1, remoteCasts = -1, swingsPlayed, castsPlayed, remoteHp, remoteMaxHp, remoteMana, remoteMaxMana;
     private string localCastSpell = "";
@@ -30,6 +30,7 @@ public sealed partial class Plugin
         public string model = "", name = "";
         public Vector3 position;
         public float yaw;
+        public int hp, maxHp;
     }
     private void InstallEntityHooks()
     {
@@ -40,7 +41,7 @@ public sealed partial class Plugin
     {
         var pet = Player.PlayerChar != null ? Player.PlayerChar.GetPet() : null;
         if (pet == null || !pet.gameObject.activeInHierarchy || pet.monsterData == null) return new PetSnapshot();
-        return new PetSnapshot { present = true, model = pet.monsterData.displayName, name = pet.CharacterName ?? "Pet", position = pet.transform.position, yaw = pet.transform.eulerAngles.y };
+        return new PetSnapshot { present = true, model = pet.monsterData.displayName, name = pet.CharacterName ?? "Pet", position = pet.transform.position, yaw = pet.transform.eulerAngles.y, hp = pet.HP(), maxHp = pet.MaxHP() };
     }
     private void ApplyPeerFrame(PeerFrame frame)
     {
@@ -59,6 +60,7 @@ public sealed partial class Plugin
         if (remoteCasts >= 0 && frame.casts != remoteCasts) PlayReplicaCast(frame.castSpell);
         remoteSwings = frame.swings;
         remoteCasts = frame.casts;
+        PlayReplicaVisuals(frame);
     }
     private static string LocalName() => SteamReady ? SteamFriends.GetPersonaName() : Player.PlayerChar.CharacterName;
     private void SendProfileIfChanged()
@@ -73,13 +75,14 @@ public sealed partial class Plugin
             return data;
         }).ToList();
         var name = LocalName();
-        var key = name + JsonUtility.ToJson(new ItemStorage { items = equipment });
+        var key = name + player.GetActiveWeaponSet + JsonUtility.ToJson(new ItemStorage { items = equipment });
         if (key == sentProfileKey) return;
         var save = new PlayerSaveData();
         player.FillPlayerSaveData(ref save);
         save = save.CreatePartyMemberCopy();
         save.playerName = name;
         save.lineage = 0;
+        save.activeWeaponSet = player.GetActiveWeaponSet;
         Send("profile", JsonUtility.ToJson(new Profile { name = name, player = save, equipment = equipment }));
         sentProfileKey = key;
     }
@@ -89,6 +92,7 @@ public sealed partial class Plugin
         if (profile?.player == null || profile.name.Length == 0 || profile.name.Length > 64 || profile.equipment.Count > 20 || profile.equipment.Any(item => !Fate.IsItemSlotInEquipmentSlot(item.slotIndex)))
             throw new InvalidOperationException("Invalid partner profile.");
         remoteProfileJson = body;
+        partnerName = profile.name;
         if (actor != null && mirroring) Despawn(preserveIntent: true);
         SetStatus(profile.name + " is connected.");
     }
@@ -143,13 +147,40 @@ public sealed partial class Plugin
         if (remotePet != null) { remotePet.gameObject.SetActive(false); UnityEngine.Object.Destroy(remotePet.gameObject); }
         remotePet = null; remotePetModel = "";
     }
-    private static void DrawBar(Rect area, int value, int max, Color fill)
+    private static void DrawBar(Rect area, int value, int max, Color fill) => DrawFill(area, max > 0 ? (float)value / max : 0f, fill);
+
+    private static void DrawFill(Rect area, float fraction, Color fill)
     {
         GUI.color = Color.black;
         GUI.DrawTexture(area, Texture2D.whiteTexture);
         GUI.color = fill;
-        GUI.DrawTexture(new Rect(area.x, area.y, max > 0 ? area.width * Mathf.Clamp01((float)value / max) : 0f, area.height), Texture2D.whiteTexture);
+        GUI.DrawTexture(new Rect(area.x, area.y, area.width * Mathf.Clamp01(fraction), area.height), Texture2D.whiteTexture);
         GUI.color = Color.white;
+    }
+
+    private void DrawPartnerFrame()
+    {
+        if (!peerConnected || remoteFrame == null || partnerName.Length == 0) return;
+        var frame = remoteFrame;
+        var box = new Rect(12, Screen.height - 150, 230, 138);
+        GUI.Box(box, "");
+        var centered = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter };
+        GUI.Label(new Rect(box.x + 8, box.y + 4, box.width - 16, 20), partnerName + "   Lv " + frame.level);
+        var place = frame.hp <= 0 && frame.maxHp > 0 ? "Down" : frame.worldKey == "GroveTown" ? "Grove town" : frame.depth > 0 ? "Floor " + frame.depth : "Travelling";
+        GUI.Label(new Rect(box.x + 8, box.y + 22, box.width - 16, 18), place);
+        var bar = new Rect(box.x + 8, box.y + 44, box.width - 16, 16);
+        DrawBar(bar, frame.hp, frame.maxHp, new Color(0.75f, 0.1f, 0.1f));
+        GUI.Label(bar, frame.hp + " / " + frame.maxHp, centered);
+        bar.y += 20;
+        DrawBar(bar, frame.mana, frame.maxMana, new Color(0.2f, 0.4f, 0.9f));
+        GUI.Label(bar, frame.mana + " / " + frame.maxMana, centered);
+        bar.y += 20;
+        bar.height = 6;
+        DrawFill(bar, frame.xpPercent, new Color(0.9f, 0.75f, 0.2f));
+        var pet = JsonUtility.FromJson<PetSnapshot>(frame.petJson);
+        if (pet == null || !pet.present) return;
+        GUI.Label(new Rect(box.x + 8, box.y + 98, box.width - 16, 18), pet.name);
+        DrawBar(new Rect(box.x + 8, box.y + 118, box.width - 16, 8), pet.hp, pet.maxHp, new Color(0.3f, 0.7f, 0.3f));
     }
     private static void DrawEntityLabel(Vector3 position, string label)
     {
