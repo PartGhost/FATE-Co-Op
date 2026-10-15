@@ -78,6 +78,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallWorldHooks();
             InstallEntityHooks();
             InstallCombatHooks();
+            InstallLootHooks();
             commandLineLobby = LobbyFromCommandLine();
             SetStatus("Ready. Save isolation verified; F8 spawns, F9 walks, F10 stops.");
             Logger.LogInfo("ISOLATION_OK " + actual);
@@ -133,6 +134,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         layoutHash = "";
         loadedWorldKey = "";
         ResetMonsters();
+        ResetGround();
         if (actor != null) guestWanted = true;
         Despawn(preserveIntent: true);
         if (respawn != null) StopCoroutine(respawn);
@@ -249,6 +251,30 @@ public sealed partial class Plugin : BaseUnityPlugin
                 }
                 aggroMonster.SetTarget(actor);
                 aggroMonster.SetAIState(AIState.Hunt);
+                break;
+            case "test-drop":
+                var dropper = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
+                var dropped = dropper.inventory.FirstOrDefault(item => item != null && !Fate.IsItemSlotInEquipmentSlot(item.slotIndex)) ?? throw new InvalidOperationException("Nothing in the bag to drop.");
+                dropper.RemoveItemFromInventory(dropped, RemoveItemReason.Drop);
+                dropped.Drop(dropper.transform.position);
+                break;
+            case "test-take":
+                var taker = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
+                var nearestItem = UnityEngine.Object.FindObjectsOfType<DroppedItem>().Where(d => d.Item != null).OrderBy(d => (d.transform.position - taker.transform.position).sqrMagnitude).FirstOrDefault()
+                    ?? throw new InvalidOperationException("No item on the ground.");
+                nearestItem.Interact(taker);
+                break;
+            case "test-open":
+                var opener = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
+                var chest = UnityEngine.Object.FindObjectsOfType<ContainerInteractable>().Where(c => !c.IsOpen && !c.IsLocked).OrderBy(c => (c.transform.position - opener.transform.position).sqrMagnitude).FirstOrDefault()
+                    ?? throw new InvalidOperationException("No closed chest.");
+                chest.Interact(opener);
+                break;
+            case "test-break":
+                var breaker = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
+                var barrel = UnityEngine.Object.FindObjectsOfType<ContainerDestroyable>().Where(b => !b.IsDestroyed).OrderBy(b => (b.transform.position - breaker.transform.position).sqrMagnitude).FirstOrDefault()
+                    ?? throw new InvalidOperationException("No intact barrel.");
+                barrel.Destroyed();
                 break;
             case "test-calm":
                 if (aggroMonster != null && !aggroMonster.MyVitals.IsDead)
@@ -579,7 +605,9 @@ public sealed partial class Plugin : BaseUnityPlugin
             remoteName = actor != null ? actor.CharacterName : "", monstersTracked = monsters.Count, aggro = aggroMonster == null ? "" : $"{aggroMonster.GetAIState()} target={(aggroMonster.Target() != null ? aggroMonster.Target().name : "none")} distance={(actor != null ? Vector3.Distance(aggroMonster.transform.position, actor.transform.position) : -1f):0.0} range={aggroMonster.InAttackRange()} facing={aggroMonster.FacingTarget()} attacking={aggroMonster.GetComponent<Animator>().GetBool("IsAttacking")} key={aggroMonster.monsterData.displayName} attack={CurrentAttackField.GetValue(aggroMonster) != null} timer={aggroMonster.attackTimer:0.00} paused={Fate.isPaused}",
             trackedHp = Mathf.RoundToInt(monsters.Values.Where(m => m != null).Sum(m => m.hp)), trackedDead = monsters.Values.Count(m => m != null && m.MyVitals.IsDead),
             hitsSent = hitsSent, hitsApplied = hitsApplied, strikesSent = strikesSent, strikesTaken = strikesTaken, killsSent = killsSent, killsTaken = killsTaken,
-            swingsPlayed = swingsPlayed, castsPlayed = castsPlayed, primaryHp = host != null ? host.hp : 0f, primaryExperience = host != null ? (long)host.experience : 0,
+            swingsPlayed = swingsPlayed, castsPlayed = castsPlayed, groundItems = ground.Count(entry => entry.Value != null && (!isHost || announcedGround.Contains(entry.Key))),
+            lootGiven = lootGiven, lootTaken = lootTaken, dropsSent = dropsSent, bagItems = host != null ? host.inventory.Count : 0,
+            openChests = UnityEngine.Object.FindObjectsOfType<ContainerInteractable>().Count(c => c.IsOpen), brokenBarrels = UnityEngine.Object.FindObjectsOfType<ContainerDestroyable>().Count(b => b.IsDestroyed), primaryHp = host != null ? host.hp : 0f, primaryExperience = host != null ? (long)host.experience : 0,
             primaryOnNavMesh = host != null && host.GetComponent<NavMeshAgent>() != null && host.GetComponent<NavMeshAgent>().isOnNavMesh,
             gameScene = SceneLoad.CurrentScene.ToString(),
             activeMeshes = visibleMeshes.Length, meshesSeenByCamera = visibleMeshes.Count(r => r.isVisible),
@@ -612,7 +640,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             try { StartRoute(); } catch (Exception e) { SetStatus(e.Message); }
         if (GUILayout.Button("Stop (F10)")) StopRoute();
         GUILayout.EndHorizontal();
-        GUILayout.Label(!sharedSession ? "F11 hides this panel. Prototype test controls." : isHost ? "Shared combat on. Loot drops for the host only." : "Shared combat on. Pickups and chests are host-only for now.");
+        GUILayout.Label(!sharedSession ? "F11 hides this panel. Prototype test controls." : isHost ? "Shared combat and loot on. You host the world." : "Shared combat and loot on. First to grab gets it.");
         GUILayout.Label(link == null ? "Not in co-op." : (isHost ? "Hosting co-op: " : "Joined co-op: ") + (peerConnected ? "partner connected" : "waiting for partner"));
         GUILayout.BeginHorizontal();
         if (link == null && SteamReady && GUILayout.Button("Host Steam co-op"))
@@ -655,7 +683,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         public Vector3 remotePetPosition;
         public string remotePetModel = "";
         public string remoteName = "", aggro = "";
-        public int monstersTracked, trackedHp, trackedDead, hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, swingsPlayed, castsPlayed;
+        public int monstersTracked, trackedHp, trackedDead, hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, swingsPlayed, castsPlayed, groundItems, lootGiven, lootTaken, dropsSent, bagItems, openChests, brokenBarrels;
         public float primaryHp;
         public long primaryExperience;
     }

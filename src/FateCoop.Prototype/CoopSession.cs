@@ -9,7 +9,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.8.0";
+    internal const string Version = "0.9.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     private const float FrameInterval = 0.05f, PeerTimeout = 10f;
     private IPeerLink? link;
@@ -82,7 +82,7 @@ public sealed partial class Plugin
         }
         if (!peerConnected) return;
         SendProfileIfChanged();
-        if (isHost) SyncMonsters();
+        if (isHost) { SyncMonsters(); SyncGround(); }
         else if (remoteFrame != null) FollowHost(remoteFrame);
     }
 
@@ -132,6 +132,13 @@ public sealed partial class Plugin
                 case "strike": TakeStrike(envelope.body); break;
                 case "hurt": TakeHurt(envelope.body); break;
                 case "kill": TakeKill(envelope.body); break;
+                case "ground": ReceiveGround(envelope.body); break;
+                case "ground-gone": ReceiveGroundGone(envelope.body); break;
+                case "take": GiveTake(envelope.body); break;
+                case "granted": ReceiveGranted(envelope.body); break;
+                case "drop": ReceiveDrop(envelope.body); break;
+                case "use-fixture": UseFixture(envelope.body); break;
+                case "fixture": ApplyFixture(envelope.body); break;
                 default: throw new InvalidOperationException("Unknown peer message: " + envelope.type);
             }
         }

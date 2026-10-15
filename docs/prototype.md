@@ -1,3 +1,16 @@
+# Grove co-op prototype — 0.9.0
+
+## Shared loot
+
+Ground loot is shared: first to grab it wins. The host holds the only real copy of every item and gold pile on the ground, in the dungeon and in Grove town.
+
+- **Announcing items.** Four times a second the host scans dropped items and gold piles. Anything that has stayed put for 0.6 seconds (its drop bounce is over) gets an ID and is sent to the guest with its full `ItemSaveData` and position. Anything that disappears is announced as gone. The guest shows copies that sit outside the level's item list and the town's container parent, so the game never saves them and they can't be duplicated through a save. The floor snapshot the guest installs has its ground items and gold piles removed, so it shows only the host's announced copies.
+- **Picking up.** On the guest, clicking an item, walking over gold, or a pet fetching an item sends a request. The host removes the real item and grants it, and the guest adds it to the bag or hotbar with the game's normal loot rules. If the bag is full, the item goes back to the host and is dropped where the guest stands. The host picks up normally, and the item vanishes for the guest.
+- **Dropping for each other.** Every guest drop path (the inventory drop slot, gamepad drop, overflow re-drops) ends in `Item.Drop`. On the guest that call is sent to the host, which drops the item for real, so both players see it.
+- **Chests and barrels.** A guest opening a chest or breaking a barrel asks the host to do it (matched by position), so contents, gold and traps come from the host's world. The host announces opened chests and broken barrels, and the guest shows them in that state.
+
+`Test-SharedLoot.ps1` checks a guest drop showing for both players, a host pickup, a host drop and guest pickup with the combined bag count unchanged, and a guest chest and barrel. A guest-to-host trade in Grove town also kept both bags at 11 items in total. Combat, dungeon and movement tests still pass.
+
 # Grove co-op prototype — 0.8.0
 
 ## Shared combat
@@ -8,7 +21,6 @@ The 0.6 test monster is gone. During a session every monster is real and shared:
 - **The guest's hits go to the host.** On the guest, damage the player or its pets deal to a shared monster is sent to the host instead of being applied, and the host applies it with the partner's replica as the source. Misses and blocks show locally, as before.
 - **Monsters hurt the guest.** Host monsters can target the guest's replica: target search includes it, and AI stays awake near it. A monster swing at the replica is forwarded, and the guest replays it with its own copy of that monster against its real player, so the guest's armor, block and resistances apply. Spell and effect damage on the replica is forwarded as raw damage and runs through the guest's own resistances. Damage over time on the replica isn't forwarded yet.
 - **Both players get XP.** When a shared monster dies, the host sends its XP and fame, and the guest awards them to its own player (if alive) and plays the death. The host gets XP the normal way, or through the replica when the guest landed the kill.
-- **Loot drops for the host only.** Guest pickups and chests stay disabled until shared drops (first to grab) are built.
 - **Names and gear.** Each game sends a profile: its Steam name (or the character name if Steam isn't running), appearance and equipped items. The partner's replica is built from it, so it carries their name, look and weapon. It is rebuilt when their equipment changes. Labels show the partner's name and their pet's name.
 - **Attack animations.** Swings (Player.StartAttack) and casts (Character.Cast) are counted into the frame. The replica plays the matching clip, and its own strike or spell at the end of the animation is suppressed.
 

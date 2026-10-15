@@ -27,10 +27,7 @@ public sealed partial class Plugin
     {
         harmony!.Patch(AccessTools.Method(typeof(LevelGenerator), "LoadSaveData"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeLoadFloor)));
         harmony.Patch(AccessTools.Method(typeof(Monster), "UpdateAI"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeMonsterAI)));
-        harmony.Patch(AccessTools.Method(typeof(DroppedItem), "Interact"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeSharedInteraction)));
-        harmony.Patch(AccessTools.Method(typeof(ContainerInteractable), "Interact"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeSharedInteraction)));
     }
-    private static bool BeforeSharedInteraction() => Active == null || !Active.sharedSession || Active.isHost;
     private static bool BeforeMonsterAI(Monster __instance)
     {
         var plugin = Active;
@@ -44,6 +41,8 @@ public sealed partial class Plugin
         if (plugin?.pendingWorld == null || plugin.isHost) return;
         var world = plugin.pendingWorld;
         if (__instance.GetLevelDepth() != world.floor.depth) return;
+        world.floor.droppedItems.Clear();
+        world.floor.containers.RemoveAll(container => string.IsNullOrEmpty(container.containerItemId));
         var realm = SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove);
         realm.SetLastVisitedDungeonDepth(world.floor.depth);
         realm.SetDungeonSave(world.floor.depth, world.floor);
@@ -133,5 +132,6 @@ public sealed partial class Plugin
     {
         sharedSession = false;
         ResetMonsters();
+        ResetGround();
         DespawnRemotePet();
     }}
