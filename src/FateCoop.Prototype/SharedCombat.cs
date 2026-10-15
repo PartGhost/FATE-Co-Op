@@ -14,7 +14,7 @@ public sealed partial class Plugin
 {
     private const float MonsterInterval = 0.1f;
     private static readonly MethodInfo RollAttackMethod = AccessTools.Method(typeof(Character), "RollAttack");
-    private static readonly MethodInfo LineOfSightMethod = AccessTools.Method(typeof(LevelGenerator), "CheckValidLineSight");
+    private static readonly Func<LevelGenerator, Character, Alignment, Transform, float, float, float, int, bool> LineOfSight = AccessTools.MethodDelegate<Func<LevelGenerator, Character, Alignment, Transform, float, float, float, int, bool>>(AccessTools.Method(typeof(LevelGenerator), "CheckValidLineSight"));
     private static readonly MethodInfo CastTimerSetter = AccessTools.PropertySetter(typeof(Character), "castTimer");
     private static readonly FieldInfo CurrentAttackField = AccessTools.Field(typeof(Character), "currentAttack");
     private readonly Dictionary<int, Monster> monsters = new Dictionary<int, Monster>();
@@ -24,8 +24,14 @@ public sealed partial class Plugin
     private int nextMonsterId = 1;
     private float nextMonsterSync;
     private bool applyingStrike, confirmingDeath;
-    private int hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken;
+    private int hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, effectsSent, effectsTaken;
 
+    [Serializable] private sealed class EffectMessage
+    {
+        public int target, source, level;
+        public bool spell;
+        public EffectData effect = null!;
+    }
     private sealed class MonsterState
     {
         internal const int Walking = 1, Running = 2, Attacking = 4, Dead = 8;
@@ -85,7 +91,7 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(Player), "StartAttack"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterLocalSwing)));
         harmony.Patch(AccessTools.Method(typeof(Character), "Cast", Type.EmptyTypes), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterLocalCast)));
         harmony.Patch(AccessTools.Method(typeof(PartyMember), "AnimCallbackAttackEnd"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeReplicaAttackEnd)));
-    }
+        harmony.Patch(AccessTools.Method(typeof(Character), "AddEffect", new[] { typeof(EffectData), typeof(int), typeof(Character), typeof(int), typeof(bool) }), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeAddEffect)));    }
 
     private static bool BeforeDamage(CharacterVitals __instance, CharacterVitals.Damage data)
     {
@@ -108,6 +114,27 @@ public sealed partial class Plugin
             plugin.Send("hit", string.Join("|", id, data.value, (int)data.damageType, data.isCritical ? 1 : 0));
             plugin.hitsSent++;
         }
+        return false;
+    }
+
+    private static bool BeforeAddEffect(Character __instance, EffectData effect, int sourceLevel, Character source, int itemSlotIndex, bool isSpellEffect, ref AppliedEffect __result)
+    {
+        var plugin = Active;
+        if (plugin == null || !plugin.sharedSession) return true;
+        var mirrorId = 0;
+        var proxy = __instance == plugin.actor || __instance == plugin.remotePet || (!plugin.isHost && __instance is Monster mirror && plugin.monsterIds.TryGetValue(mirror, out mirrorId));
+        if (!proxy) return true;
+        if (__instance != plugin.remotePet && source != null && source != plugin.actor && plugin.peerConnected)
+        {
+            var local = source == Player.PlayerChar || (source.HasMaster() && source.Master() == Player.PlayerChar);
+            var sourceId = source is Monster attacker && plugin.monsterIds.TryGetValue(attacker, out var attackerId) ? attackerId : 0;
+            if (plugin.isHost || local)
+            {
+                plugin.Send("effect", JsonUtility.ToJson(new EffectMessage { target = mirrorId, source = plugin.isHost ? sourceId : 0, level = sourceLevel, spell = isSpellEffect, effect = effect }));
+                plugin.effectsSent++;
+            }
+        }
+        __result = new AppliedEffect(effect, sourceLevel, source, itemSlotIndex, isSpellEffect);
         return false;
     }
 
@@ -158,7 +185,7 @@ public sealed partial class Plugin
         var plugin = Active;
         if (__result != null || plugin == null || !plugin.isHost || !plugin.sharedSession || plugin.actor == null) return;
         var mask = ~((1 << LayerMask.NameToLayer("Player")) | (1 << LayerMask.NameToLayer("Player Damagable")));
-        if ((bool)LineOfSightMethod.Invoke(__instance, new object[] { plugin.actor, alignment, transformation, motionRadius, coneRadius, radius, mask })) __result = plugin.actor;
+        if (LineOfSight(__instance, plugin.actor, alignment, transformation, motionRadius, coneRadius, radius, mask)) __result = plugin.actor;
     }
 
     private static void AfterLocalSwing(Player __instance)
@@ -279,13 +306,16 @@ public sealed partial class Plugin
     {
         if (Time.unscaledTime < nextMonsterSync) return;
         nextMonsterSync = Time.unscaledTime + MonsterInterval;
-        if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || !PeerInWorld()) { monsterStates.Clear(); return; }
+        if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || !SharedWorldReady()) return;
+        var inWorld = PeerInWorld();
+        if (!inWorld) monsterStates.Clear();
         var lines = new List<string>();
         var seen = new HashSet<int>();
         foreach (var monster in LiveMonsters())
         {
             var id = RegisterMonster(monster);
             seen.Add(id);
+            if (!inWorld) continue;
             var state = MonsterState.Of(id, monster);
             if (monsterStates.TryGetValue(id, out var last) && !state.Differs(last)) continue;
             monsterStates[id] = state;
@@ -302,7 +332,7 @@ public sealed partial class Plugin
     private void ReceiveMonsters(string body)
     {
         if (isHost) throw new InvalidOperationException("Only the host sends monsters.");
-        if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || !SharedWorldReady()) return;
+        if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon) return;
         foreach (var line in body.Split(';'))
         {
             var state = MonsterState.Decode(line);
@@ -312,6 +342,7 @@ public sealed partial class Plugin
                 ForgetMonster(state.Id);
                 continue;
             }
+            if (!SharedWorldReady()) continue;
             if (!monsters.TryGetValue(state.Id, out var monster) || monster == null) monster = SpawnMirror(state);
             monsterStates[state.Id] = state;
             monster.maxHpBase = Mathf.RoundToInt(state.MaxHp);
@@ -402,6 +433,26 @@ public sealed partial class Plugin
         if (player == null || !player.Alive()) return;
         monsters.TryGetValue(ParseInt(parts[0]), out var source);
         player.MyVitals.ApplyDamage(new CharacterVitals.Damage { value = value, damageType = (DamageType)type, isCritical = parts[3] == "1", source = source != null ? source.MyVitals : null }, false);
+    }
+
+    private void TakeEffect(string body)
+    {
+        var message = JsonUtility.FromJson<EffectMessage>(body);
+        if (message?.effect == null || message.level < 0 || message.level > 1000) throw new InvalidOperationException("Invalid effect.");
+        if (message.target != 0)
+        {
+            if (!isHost) throw new InvalidOperationException("Only the host applies effects to monsters.");
+            if (monsters.TryGetValue(message.target, out var monster) && monster != null && !monster.MyVitals.IsDead)
+                monster.AddEffect(message.effect, message.level, actor, -1, message.spell);
+        }
+        else
+        {
+            var player = Player.PlayerChar;
+            if (player == null || !player.Alive()) return;
+            Character? source = message.source != 0 && monsters.TryGetValue(message.source, out var attacker) ? attacker : actor;
+            player.AddEffect(message.effect, message.level, source, -1, message.spell);
+        }
+        effectsTaken++;
     }
 
     private void TakeKill(string body)

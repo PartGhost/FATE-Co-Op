@@ -9,7 +9,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.10.0";
+    internal const string Version = "0.11.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     private const float FrameInterval = 0.05f, PeerTimeout = 10f;
     private IPeerLink? link;
@@ -153,6 +153,7 @@ public sealed partial class Plugin
                 case "hit": ApplyHit(envelope.body); break;
                 case "strike": TakeStrike(envelope.body); break;
                 case "hurt": TakeHurt(envelope.body); break;
+                case "effect": TakeEffect(envelope.body); break;
                 case "kill": TakeKill(envelope.body); break;
                 case "ground": ReceiveGround(envelope.body); break;
                 case "ground-gone": ReceiveGroundGone(envelope.body); break;

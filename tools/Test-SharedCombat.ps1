@@ -63,5 +63,13 @@ $missingClips = @(foreach ($log in @('artifacts\runtime\Player.log', 'artifacts\
 if ($missingClips.Count -gt 0) { throw ('Replica attack clips missing: ' + $missingClips[0].Line) }
 Write-Output 'Both replicas played their partner''s attack swing with a real clip.'
 
-[ordered]@{ passed = $true; paired = $paired; guestHit = $hitConverged; guestKill = $guestKillSeen; hostKill = $hostKillSeen; strike = $strike; swingOnB = $swingB; swingOnA = $swingA } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $workspace 'artifacts\shared-combat-verification.json')
-Write-Output 'PASS: shared monsters, guest and host kills with XP for both, monster strikes on the guest, replica swings.'
+$beforeGuestEffect = Wait-Pair { param($a, $b) Converged $a $b } 'Monsters settled before the guest effect'
+Send 'test-effect' 'b'
+$poisoned = Wait-Pair { param($a, $b) $a.effectsTaken -gt $beforeGuestEffect.a.effectsTaken -and $a.trackedHp -lt $beforeGuestEffect.a.trackedHp -and (Converged $a $b) } 'Guest effect landing on the host monster'
+Write-Output ('Guest effect landed on the host''s monster: health total ' + $beforeGuestEffect.a.trackedHp + ' -> ' + $poisoned.a.trackedHp + ' in both games.')
+$beforeHostEffect = State b
+Send 'test-effect-partner'
+$guestPoisoned = Wait-Pair { param($a, $b) $b.effectsTaken -gt $beforeHostEffect.effectsTaken -and $b.primaryHp -lt $beforeHostEffect.primaryHp } 'Monster effect landing on the guest'
+Write-Output ('Monster effect on the guest''s replica landed on the guest: HP ' + $beforeHostEffect.primaryHp + ' -> ' + $guestPoisoned.b.primaryHp + '.')
+[ordered]@{ passed = $true; guestEffect = $poisoned; hostEffect = $guestPoisoned; paired = $paired; guestHit = $hitConverged; guestKill = $guestKillSeen; hostKill = $hostKillSeen; strike = $strike; swingOnB = $swingB; swingOnA = $swingA } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $workspace 'artifacts\shared-combat-verification.json')
+Write-Output 'PASS: shared monsters, guest and host kills with XP for both, monster strikes and effects on the guest, guest effects on monsters, replica swings.'

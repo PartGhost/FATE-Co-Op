@@ -23,6 +23,7 @@ public sealed partial class Plugin
         public string quest = "";
         public int gold, experience, fame;
         public ItemSaveData item = null!;
+        public List<ItemSaveData> questItems = new List<ItemSaveData>();
     }
 
     private void InstallQuestHooks()
@@ -41,7 +42,8 @@ public sealed partial class Plugin
         plugin.Send("quest-reward", JsonUtility.ToJson(new QuestReward
         {
             quest = QuestTitle(__instance), gold = __instance.GoldReward, experience = __instance.XPReward, fame = __instance.FameReward,
-            item = __instance.ItemReward != null ? __instance.ItemReward.GetItemSave() : new ItemSaveData()
+            item = __instance.ItemReward != null ? __instance.ItemReward.GetItemSave() : new ItemSaveData(),
+            questItems = new[] { __instance.questItem?.itemSaveData, __instance.uniqueQuestMonster?.targetItem?.itemSaveData }.OfType<ItemSaveData>().Where(data => !string.IsNullOrEmpty(data.baseName)).ToList()
         }));
         plugin.questRewardsSent++;
     }
@@ -109,6 +111,8 @@ public sealed partial class Plugin
                 finally { dropLocally = false; }
             }
         }
+        foreach (var questItem in reward.questItems.Where(data => player.inventory.Any(owned => data.MatchesItem(owned))))
+            SingletonBehaviour<PlayerStatus>.Instance.RemoveQuestItem(questItem);
         questRewardsTaken++;
         SetStatus("Party quest done: " + reward.quest + ". You got the reward too.");
     }

@@ -11,6 +11,11 @@ $manifest = $libraries | ForEach-Object { Join-Path $_ ('steamapps\appmanifest_'
 if (!$manifest) { throw 'FATE Reawakened is not installed through Steam on this PC.' }
 $installDir = [regex]::Match((Get-Content -LiteralPath $manifest -Raw), '"installdir"\s+"([^"]+)"').Groups[1].Value
 $source = Join-Path (Split-Path -Parent $manifest) ('common\' + $installDir)
+if ((Test-Path -LiteralPath $game) -and (Get-Content -LiteralPath (Join-Path $game 'version.txt') -Raw) -ne (Get-Content -LiteralPath (Join-Path $source 'version.txt') -Raw)) {
+    Write-Output 'FATE was updated since the co-op copy was made. Rebuilding the copy; your co-op character is kept.'
+    Remove-Item -LiteralPath $game -Recurse -Force
+    Remove-Item -Path (Join-Path $workspace 'artifacts\*.original') -Force -ErrorAction SilentlyContinue
+}
 if (!(Test-Path -LiteralPath $game)) {
     Write-Output ('Copying ' + $source + ' to ' + $game + ' (about 3 GB)...')
     robocopy $source $game /E /NFL /NDL /NJH /NJS /NP | Out-Null
@@ -28,3 +33,4 @@ Write-Output 'Co-op copy ready. Your real FATE install and saves are untouched.'
 Write-Output 'Last step, in Steam: right-click FATE Reawakened > Properties > General > Launch Options, and paste (Ctrl+V):'
 Write-Output ('    ' + $option)
 Write-Output 'Then start FATE from Steam, make a new Original FATE character, and accept your friend''s invite.'
+Write-Output 'To play normal FATE again, clear that launch option. After a FATE update, run this setup again.'

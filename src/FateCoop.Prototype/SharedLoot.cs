@@ -166,7 +166,8 @@ public sealed partial class Plugin
     {
         if (Time.unscaledTime < nextGroundSync) return;
         nextGroundSync = Time.unscaledTime + GroundInterval;
-        if (!PeerInWorld()) { announcedGround.Clear(); announcedFixtures.Clear(); return; }
+        if (!SharedWorldReady()) return;
+        var inWorld = PeerInWorld();
         var seen = new HashSet<int>();
         foreach (var obj in GroundObjects())
         {
@@ -177,7 +178,7 @@ public sealed partial class Plugin
                 groundSeen[id] = Time.unscaledTime;
             }
             seen.Add(id);
-            if (Time.unscaledTime - groundSeen[id] < GroundSettleTime || !announcedGround.Add(id)) continue;
+            if (!inWorld || Time.unscaledTime - groundSeen[id] < GroundSettleTime || !announcedGround.Add(id)) continue;
             Send("ground", JsonUtility.ToJson(Describe(id, obj)));
         }
         foreach (var id in ground.Keys.Where(id => !seen.Contains(id)).ToList())
@@ -185,6 +186,7 @@ public sealed partial class Plugin
             if (announcedGround.Contains(id)) Send("ground-gone", id.ToString(CultureInfo.InvariantCulture));
             ForgetGround(id);
         }
+        if (!inWorld) return;
         foreach (var chest in UnityEngine.Object.FindObjectsOfType<ContainerInteractable>().Where(c => c.IsOpen))
             AnnounceFixture(FixtureKey("c", chest.transform.position));
         foreach (var barrel in UnityEngine.Object.FindObjectsOfType<ContainerDestroyable>().Where(b => b.IsDestroyed))
@@ -258,6 +260,11 @@ public sealed partial class Plugin
         if (ground.TryGetValue(entry.id, out var replica)) RemoveGroundObject(replica);
         ForgetGround(entry.id);
         var player = Player.PlayerChar;
+        if (player == null)
+        {
+            Send("drop", body);
+            return;
+        }
         if (entry.gold > 0)
         {
             SingletonBehaviour<PlayerStatus>.Instance.AddGold((uint)entry.gold);
@@ -280,7 +287,8 @@ public sealed partial class Plugin
     {
         if (!isHost) throw new InvalidOperationException("Only the host places dropped items.");
         var entry = ReadGroundItem(body);
-        if (!NavMesh.SamplePosition(entry.position, out var hit, 3f, NavMesh.AllAreas)) throw new InvalidOperationException("Dropped item has no valid place.");
+        if (!NavMesh.SamplePosition(entry.position, out var hit, 3f, NavMesh.AllAreas) && !NavMesh.SamplePosition(Player.PlayerChar.transform.position, out hit, 3f, NavMesh.AllAreas))
+            throw new InvalidOperationException("Dropped item has no valid place.");
         if (entry.gold > 0) ActiveLevel.SpawnGoldPile(hit.position, entry.gold);
         else ToItem(entry.item).Drop(hit.position);
     }

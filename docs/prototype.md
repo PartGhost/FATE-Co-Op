@@ -1,3 +1,28 @@
+# Grove co-op prototype — 0.11.0
+
+## Second audit
+
+- **Shared effects.** Each game treats `Character.AddEffect` on a stand-in (the partner's replica, its pet, or on the guest a host-owned monster) as a request. The effect goes to the game that owns the target and is applied there with the right source (`effect` message, `EffectData` as JSON). The stand-in gets a detached `AppliedEffect`, because spell code uses the return value. This covers:
+  - the guest's poison, slows, stuns and weapon on-hit effects on monsters;
+  - monster spells and damage over time on the guest;
+  - heals and buffs either player casts on the other.
+  
+  Instant damage from an effect now happens only where the target lives, so nothing is counted twice.
+- **No ghost items or monsters.** The host keeps scanning ground items and monsters while the guest is dead or between states, and sends removals right away. Before, an item picked up or a summon that expired while the guest was dead could stay visible on the guest.
+- **No lost items in edge cases.**
+  - A granted item that arrives after the guest left gameplay goes back to the host's ground.
+  - A guest drop that has no valid spot is placed at the host's feet.
+- **Quest item clean-up.** When the host turns in a party quest, the guest drops any copy of that quest's item from its bag.
+- **FATE updates.**
+  - `Setup-FateCoop.ps1` compares `version.txt` with the installed game. On a mismatch it rebuilds the co-op copy and removes the patcher's old assembly backups; co-op saves are kept.
+  - `tools\Refresh-TestGames.ps1` does the same for the dev copies.
+- **Smaller fixes.**
+  - Line-of-sight checks for monsters targeting the replica use a compiled delegate instead of reflection.
+  - The test harness (commands, routes, telemetry) moved from `Plugin.cs` to `DevTools.cs`.
+  - The "Host Steam co-op" button calls `HostSteam()` directly.
+
+`Test-SharedCombat.ps1` now also checks a guest effect landing on a host monster and a monster effect on the replica landing on the guest. All six suites pass.
+
 # Grove co-op prototype — 0.10.0
 
 ## Session flow, party quests and audit fixes
