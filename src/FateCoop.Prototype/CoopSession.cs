@@ -9,13 +9,13 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.7.0";
+    internal const string Version = "0.8.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     private const float FrameInterval = 0.05f, PeerTimeout = 10f;
     private IPeerLink? link;
     private bool isHost = true, peerConnected;
     private float lastPeerMessage = float.NegativeInfinity, nextFrame;
-    private PeerFrame? hostFrame;
+    private PeerFrame? remoteFrame;
     private string requestedWorld = "";
     private ulong commandLineLobby;
     private Callback<GameLobbyJoinRequested_t>? lobbyInvites;
@@ -28,8 +28,9 @@ public sealed partial class Plugin
     {
         public string worldKey = "", scene = "";
         public Vector3 primaryPosition = Vector3.zero;
-        public float primaryYaw = 0;
-        public string petJson = "", combatJson = "", attackJson = "";
+        public float primaryYaw = 0, swingSpeed = 0;
+        public int swings, casts;
+        public string petJson = "", castSpell = "";
     }
 
     internal static string Compatibility => Version + "/" + Application.version;
@@ -71,7 +72,7 @@ public sealed partial class Plugin
         if (connected != peerConnected)
         {
             peerConnected = connected;
-            if (connected) { movementSession = true; SetStatus("Co-op partner connected."); }
+            if (connected) { sharedSession = true; sentProfileKey = ""; SetStatus("Co-op partner connected."); }
             else { DropPeer(); SetStatus("Co-op partner stopped responding."); }
         }
         if (Time.unscaledTime >= nextFrame)
@@ -79,7 +80,10 @@ public sealed partial class Plugin
             nextFrame = Time.unscaledTime + FrameInterval;
             Send("frame", JsonUtility.ToJson(LocalFrame()));
         }
-        if (peerConnected && !isHost && hostFrame != null) FollowHost(hostFrame);
+        if (!peerConnected) return;
+        SendProfileIfChanged();
+        if (isHost) SyncMonsters();
+        else if (remoteFrame != null) FollowHost(remoteFrame);
     }
 
     private PeerFrame LocalFrame()
@@ -89,8 +93,7 @@ public sealed partial class Plugin
         {
             worldKey = SharedWorldReady() ? CurrentWorldKey() : "", scene = SceneLoad.CurrentScene.ToString(),
             primaryPosition = host != null ? host.transform.position : Vector3.zero, primaryYaw = host != null ? host.transform.eulerAngles.y : 0f,
-            petJson = JsonUtility.ToJson(LocalPetSnapshot()), combatJson = isHost ? JsonUtility.ToJson(CombatState()) : "",
-            attackJson = pendingAttack != null ? JsonUtility.ToJson(pendingAttack) : ""
+            petJson = JsonUtility.ToJson(LocalPetSnapshot()), swings = localSwings, swingSpeed = localSwingSpeed, casts = localCasts, castSpell = localCastSpell
         };
     }
 
@@ -123,6 +126,12 @@ public sealed partial class Plugin
                     if (transitioning) { requestedWorld = ""; break; }
                     JoinWorld(JsonUtility.FromJson<WorldSnapshot>(envelope.body));
                     break;
+                case "profile": ReceiveProfile(envelope.body); break;
+                case "monsters": ReceiveMonsters(envelope.body); break;
+                case "hit": ApplyHit(envelope.body); break;
+                case "strike": TakeStrike(envelope.body); break;
+                case "hurt": TakeHurt(envelope.body); break;
+                case "kill": TakeKill(envelope.body); break;
                 default: throw new InvalidOperationException("Unknown peer message: " + envelope.type);
             }
         }
@@ -136,7 +145,7 @@ public sealed partial class Plugin
     private void ReceiveFrame(PeerFrame frame)
     {
         if (frame == null) throw new InvalidOperationException("Empty peer frame.");
-        if (!isHost) hostFrame = frame;
+        remoteFrame = frame;
         if (frame.worldKey.Length > 0 && frame.worldKey == CurrentWorldKey() && SharedWorldReady())
         {
             ApplyPeerFrame(frame);
@@ -164,8 +173,9 @@ public sealed partial class Plugin
     private void DropPeer()
     {
         Despawn();
-        RestoreSessionSafety();
-        hostFrame = null;
+        LeaveSharedWorld();
+        remoteFrame = null;
+        remoteProfileJson = "";
         requestedWorld = "";
     }
 

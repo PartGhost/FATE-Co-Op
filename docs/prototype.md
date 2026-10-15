@@ -1,4 +1,18 @@
-# Grove co-op prototype — 0.7.0
+# Grove co-op prototype — 0.8.0
+
+## Shared combat
+
+The 0.6 test monster is gone. During a session every monster is real and shared:
+
+- **The host owns all monsters.** It runs their AI, health and deaths. The floor snapshot now carries a monster ID for each saved monster. The host assigns IDs by matching its live monsters to the save it just wrote. The guest matches its loaded monsters by name and position, removes any it can't match, and spawns a model for monsters the host adds later (summons, curses, trapped chests). The host sends changed monster states (position, facing, health, walking, running, attacking, dead) 10 times a second.
+- **The guest's hits go to the host.** On the guest, damage the player or its pets deal to a shared monster is sent to the host instead of being applied, and the host applies it with the partner's replica as the source. Misses and blocks show locally, as before.
+- **Monsters hurt the guest.** Host monsters can target the guest's replica: target search includes it, and AI stays awake near it. A monster swing at the replica is forwarded, and the guest replays it with its own copy of that monster against its real player, so the guest's armor, block and resistances apply. Spell and effect damage on the replica is forwarded as raw damage and runs through the guest's own resistances. Damage over time on the replica isn't forwarded yet.
+- **Both players get XP.** When a shared monster dies, the host sends its XP and fame, and the guest awards them to its own player (if alive) and plays the death. The host gets XP the normal way, or through the replica when the guest landed the kill.
+- **Loot drops for the host only.** Guest pickups and chests stay disabled until shared drops (first to grab) are built.
+- **Names and gear.** Each game sends a profile: its Steam name (or the character name if Steam isn't running), appearance and equipped items. The partner's replica is built from it, so it carries their name, look and weapon. It is rebuilt when their equipment changes. Labels show the partner's name and their pet's name.
+- **Attack animations.** Swings (Player.StartAttack) and casts (Character.Cast) are counted into the frame. The replica plays the matching clip, and its own strike or spell at the end of the animation is suppressed.
+
+`Test-SharedCombat.ps1` checks matching monsters and health totals, a guest hit, a guest kill and a host kill with XP for both players, a monster swing at the guest, and replica swings in both directions with no missing clip. Test commands: `test-hit` (local player rolls an attack on the nearest enemy), `test-swing`, `test-aggro` / `test-calm` (host sends one monster with high health at the replica, then restores it). 0.8 acceptance passed together with `Test-SharedDungeon.ps1` and `Test-TwoPlayerMovement.ps1`. Repeated monster strikes took the guest from 122 to 72 HP while the host stayed at 122.
 
 ## Steam lobbies and the direct game link
 
@@ -15,7 +29,7 @@ Command files also accept `host-steam`, `join-steam <lobby id>`, `invite` and `l
 
 0.7 acceptance on the local link passed: two-player movement (A 4.52, B 3.01 units, replicas within 0.25 units, no rejected messages); shared floors 1–3 and back to Grove; shared combat with both players and the guest pet; leaving removed the remote player and pet on both sides, and rejoining restored them on the same floor. On Steam, a game started from Steam created the lobby and opened the invite dialog. Joining needs a second Steam account and hasn't been tested yet.
 
-## Remote pets and one shared monster
+## Remote pets and one shared monster (0.6, replaced by shared combat)
 
 Both games now display the other player's actual pet model, position and facing. The replica belongs to the remote guest and is never inserted into the primary player's pet/save list. Its AI and collision are disabled; the owning game's real pet continues its native behavior. Town/floor transitions and disconnects remove replicas before rebuilding the shared world.
 

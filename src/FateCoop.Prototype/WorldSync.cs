@@ -13,15 +13,14 @@ public sealed partial class Plugin
     private readonly string sessionId = Guid.NewGuid().ToString("N");
     private string layoutHash = "", loadedWorldKey = "";
     private WorldSnapshot? pendingWorld, joiningWorld;
-    private bool movementSession;
-    private float nextSafetyUpdate;
-    private readonly Dictionary<Character, bool> protectedCharacters = new Dictionary<Character, bool>();
+    private bool sharedSession;
 
     [Serializable] private sealed class WorldSnapshot
     {
-        public int version = 1;
+        public int version = 2;
         public string worldKey = "", layoutHash = "";
         public DungeonSaveData floor = null!;
+        public List<int> monsterIds = new List<int>();
     }
 
     private void InstallWorldHooks()
@@ -31,15 +30,13 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(DroppedItem), "Interact"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeSharedInteraction)));
         harmony.Patch(AccessTools.Method(typeof(ContainerInteractable), "Interact"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeSharedInteraction)));
     }
-    private static bool BeforeSharedInteraction() => Active == null || !Active.movementSession;
+    private static bool BeforeSharedInteraction() => Active == null || !Active.sharedSession || Active.isHost;
     private static bool BeforeMonsterAI(Monster __instance)
     {
-        if (Active == null || !Active.movementSession) return true;
-        if (__instance == Active.remotePet) return false;
-        if (__instance == Active.combatMonster && Active.isHost) return true;
-        __instance.SetTarget(null);
-        __instance.StopPathing();
-        return false;
+        var plugin = Active;
+        if (plugin == null) return true;
+        if (__instance == plugin.remotePet) return false;
+        return !plugin.sharedSession || plugin.isHost || __instance.MyVitals.IsDead || (__instance.HasMaster() && __instance.Master() == Player.PlayerChar);
     }
     private static void BeforeLoadFloor(LevelGenerator __instance)
     {
@@ -69,7 +66,11 @@ public sealed partial class Plugin
         layoutHash = Fingerprint(LevelGenerator.currentInstance);
         if (!isHost && joiningWorld != null)
         {
-            if (layoutHash == joiningWorld.layoutHash) loadedWorldKey = joiningWorld.worldKey;
+            if (layoutHash == joiningWorld.layoutHash)
+            {
+                loadedWorldKey = joiningWorld.worldKey;
+                MatchMirrors(joiningWorld);
+            }
             else { loadedWorldKey = ""; Logger.LogError("HOST_LAYOUT_MISMATCH expected=" + joiningWorld.layoutHash + " actual=" + layoutHash); }
             joiningWorld = null;
         }
@@ -81,19 +82,18 @@ public sealed partial class Plugin
         generator.PreSaveTask(SaveData.CurrentSaveData);
         var floor = SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).GetDungeonSave(generator.GetLevelDepth());
         Logger.LogInfo("HOST_WORLD_EXPORTED depth=" + floor.depth);
-        return new WorldSnapshot { worldKey = CurrentWorldKey(), layoutHash = layoutHash, floor = floor };
+        return new WorldSnapshot { worldKey = CurrentWorldKey(), layoutHash = layoutHash, floor = floor, monsterIds = AssignExportIds(floor) };
     }
     private void JoinWorld(WorldSnapshot snapshot)
     {
         if (Player.PlayerChar == null || Fate.CurrentFateVer != Fate.FateVer.Original)
             throw new InvalidOperationException("Joining requires a selected Original FATE character.");
-        if (snapshot == null || snapshot.version != 1 || snapshot.floor == null || snapshot.floor.depth < 1 || snapshot.floor.depth > 10000
+        if (snapshot == null || snapshot.version != 2 || snapshot.floor == null || snapshot.monsterIds.Count != snapshot.floor.monsters.Count || snapshot.floor.depth < 1 || snapshot.floor.depth > 10000
             || snapshot.floor.templateIndex < 0 || snapshot.floor.templateIndex >= SingletonBehaviour<FateDB>.Instance.allTemplates.Length
             || snapshot.layoutHash.Length != 64 || snapshot.worldKey.Length > 128 || snapshot.worldKey.Length == 0)
             throw new InvalidOperationException("Incoming world metadata is invalid.");
         // Clone only the world record; the joiner's player, inventory and pet records remain their own.
         pendingWorld = snapshot;
-        movementSession = true;
         Player.latestStairsUsedWasDown = true;
         Player.isComingFromMenu = false;
         Player.isEnteringDungeonFromTownDoor = true;
@@ -129,25 +129,9 @@ public sealed partial class Plugin
         writer.Flush();
         return Hash(stream.ToArray());
     }
-    private void UpdateSessionSafety()
+    private void LeaveSharedWorld()
     {
-        if (!movementSession || Time.unscaledTime < nextSafetyUpdate) return;
-        nextSafetyUpdate = Time.unscaledTime + 0.25f;
-        foreach (var monster in UnityEngine.Object.FindObjectsOfType<Monster>())
-            if (monster != combatMonster || !isHost) Protect(monster);
-        if (Player.PlayerChar != null) Protect(Player.PlayerChar);
-    }
-    private void Protect(Character character)
-    {
-        if (!protectedCharacters.ContainsKey(character)) protectedCharacters.Add(character, character.Invincible);
-        character.SetInvincible(true);
-    }
-    private void RestoreSessionSafety()
-    {
-        movementSession = false;
-        ResetCombat();
+        sharedSession = false;
+        ResetMonsters();
         DespawnRemotePet();
-        foreach (var entry in protectedCharacters) if (entry.Key != null) entry.Key.SetInvincible(entry.Value);
-        protectedCharacters.Clear();
-    }
-}
+    }}

@@ -40,6 +40,7 @@ public sealed partial class Plugin : BaseUnityPlugin
     private string instance = "a";
     private Coroutine? testWalk;
     private FileStream? runningLock;
+    private Monster? aggroMonster;
 
     private void Awake()
     {
@@ -76,6 +77,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             harmony.Patch(AccessTools.Method(typeof(LevelGenerator), "OnFinishCreation"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterWorldReady)));
             InstallWorldHooks();
             InstallEntityHooks();
+            InstallCombatHooks();
             commandLineLobby = LobbyFromCommandLine();
             SetStatus("Ready. Save isolation verified; F8 spawns, F9 walks, F10 stops.");
             Logger.LogInfo("ISOLATION_OK " + actual);
@@ -130,7 +132,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         worldReady = false;
         layoutHash = "";
         loadedWorldKey = "";
-        ResetCombat();
+        ResetMonsters();
         if (actor != null) guestWanted = true;
         Despawn(preserveIntent: true);
         if (respawn != null) StopCoroutine(respawn);
@@ -204,7 +206,6 @@ public sealed partial class Plugin : BaseUnityPlugin
                 BeginWorldChange();
             }
             if (Time.unscaledTime >= nextSnapshot) { nextSnapshot = Time.unscaledTime + 1f; Snapshot(); }
-            UpdateSessionSafety();
         }
         catch (Exception e) { Logger.LogError(e); nextPoll = Time.unscaledTime + 1f; }
     }
@@ -222,8 +223,43 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "stop": StopRoute(); break;
             case "status": Snapshot(); break;
             case "save": SaveData.RequestSave(); break;
-            case "combat-start": StartCombat(); break;
-            case "test-attack": RequestTestAttack(parts.Length > 1 ? parts[1] : "player"); break;
+            case "test-hit":
+                var attacker = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
+                var victim = NearestEnemy(attacker.transform.position) ?? throw new InvalidOperationException("No enemy to hit.");
+                attacker.SelectAttack();
+                RollAttackMethod.Invoke(attacker, new object[] { victim });
+                attacker.attackTimer = 0f;
+                CurrentAttackField.SetValue(attacker, null);
+                break;
+            case "test-swing":
+                if (Player.PlayerChar == null) throw new InvalidOperationException("No primary character.");
+                Player.PlayerChar.SelectAttack();
+                Player.PlayerChar.StartAttack();
+                break;
+            case "test-aggro":
+                if (!isHost || actor == null) throw new InvalidOperationException("test-aggro needs the host with a connected partner.");
+                if (aggroMonster == null || aggroMonster.MyVitals.IsDead)
+                {
+                    aggroMonster = NearestEnemy(actor.transform.position) ?? throw new InvalidOperationException("No enemy near the partner.");
+                    if (!NavMesh.SamplePosition(actor.transform.position + actor.transform.forward * 2f, out var beside, 3f, NavMesh.AllAreas))
+                        throw new InvalidOperationException("No navigation surface beside the partner.");
+                    aggroMonster.SetPositionProper(beside.position);
+                    aggroMonster.maxHpBase = 100000;
+                    aggroMonster.hp = 100000f;
+                }
+                aggroMonster.SetTarget(actor);
+                aggroMonster.SetAIState(AIState.Hunt);
+                break;
+            case "test-calm":
+                if (aggroMonster != null && !aggroMonster.MyVitals.IsDead)
+                {
+                    aggroMonster.maxHpBase = 1;
+                    aggroMonster.hp = 1f;
+                    aggroMonster.SetTarget(null);
+                    aggroMonster.SetAIState(AIState.Wander);
+                }
+                aggroMonster = null;
+                break;
             case "host-local": StartSession(LocalLink.Listen(), true); break;
             case "join-local":
                 if (parts.Length != 2) throw new ArgumentException("join-local <port>");
@@ -332,11 +368,23 @@ public sealed partial class Plugin : BaseUnityPlugin
         var desired = host.transform.position + host.transform.right * 3f;
         if (!NavMesh.SamplePosition(desired, out var hit, 10f, NavMesh.AllAreas))
             throw new InvalidOperationException("No navigation mesh near the primary player.");
-        var configuration = new PlayerSaveData();
-        host.FillPlayerSaveData(ref configuration);
-        configuration = configuration.CreatePartyMemberCopy();
-        configuration.playerName = "Coop Test Guest";
-        configuration.lineage = 0;
+        PlayerSaveData configuration;
+        List<ItemSaveData> equipment;
+        if (remoteProfileJson.Length > 0)
+        {
+            var profile = JsonUtility.FromJson<Profile>(remoteProfileJson);
+            configuration = profile.player;
+            equipment = profile.equipment;
+        }
+        else
+        {
+            configuration = new PlayerSaveData();
+            host.FillPlayerSaveData(ref configuration);
+            configuration = configuration.CreatePartyMemberCopy();
+            configuration.playerName = "Coop Test Guest";
+            configuration.lineage = 0;
+            equipment = new List<ItemSaveData>();
+        }
         configuration.health = Math.Max(configuration.health, 10f);
         // This test character is deliberately not added to the host's saved party collection.
         GameObject? spawned = null;
@@ -348,7 +396,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             primary = host;
             spawned.name = "FateCoop_Prototype_Guest";
             actor.SetMasterCharacter(host);
-            actor.Init(configuration, new ItemStorage { items = new List<ItemSaveData>() });
+            actor.Init(configuration, new ItemStorage { items = equipment });
             // PartyMember.Init omits gender. Apply the explicit player configuration here.
             var customization = spawned.GetComponentInChildren<CharacterCustomizationDefaults>(true);
             if (customization != null)
@@ -369,7 +417,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             spawnCount++;
             guestWanted = true;
             SetStatus("Guest spawned. F9: walking route. F8: despawn.");
-            Logger.LogInfo($"SPAWN_OK primary={host.GetInstanceID()} guest={actor.GetInstanceID()} position={hit.position} speed={agent.speed}");
+            Logger.LogInfo($"SPAWN_OK primary={host.GetInstanceID()} guest={actor.GetInstanceID()} position={hit.position} speed={agent.speed} layer={LayerMask.LayerToName(spawned.layer)}");
             Snapshot();
         }
         catch
@@ -495,6 +543,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             Logger.LogInfo("DESPAWN_OK " + old.GetInstanceID());
         }
         primary = null;
+        remoteSwings = remoteCasts = -1;
         SetStatus("Guest despawned.");
     }
 
@@ -521,13 +570,16 @@ public sealed partial class Plugin : BaseUnityPlugin
             networkConnected = peerConnected, networkAccepted = networkAccepted, networkRejected = networkRejected,
             sessionRole = link == null ? "" : isHost ? "host" : "guest", localPort = link is LocalLink local ? local.Port : 0,
             worldReady = worldReady, paused = Fate.isPaused, primaryAlive = host != null && host.Alive(),
-            layoutHash = layoutHash, worldKey = CurrentWorldKey(), movementSession = movementSession,
+            layoutHash = layoutHash, worldKey = CurrentWorldKey(), sharedSession = sharedSession,
             localPetJson = JsonUtility.ToJson(LocalPetSnapshot()), remotePetId = remotePet != null ? remotePet.GetInstanceID() : 0,
             remotePetPosition = remotePet != null ? remotePet.transform.position : Vector3.zero,
             remotePetModel = remotePetModel, localPetCount = host != null ? host.GetPetCount() : 0,
             remotePetActors = Object.FindObjectsOfType<Character>().Count(c => c.name == "FateCoop_Remote_Pet"),
             remotePetMeshes = remotePet != null ? remotePet.GetComponentsInChildren<SkinnedMeshRenderer>().Count(r => r.enabled && r.isVisible) : 0,
-            combatJson = JsonUtility.ToJson(CombatState()),
+            remoteName = actor != null ? actor.CharacterName : "", monstersTracked = monsters.Count, aggro = aggroMonster == null ? "" : $"{aggroMonster.GetAIState()} target={(aggroMonster.Target() != null ? aggroMonster.Target().name : "none")} distance={(actor != null ? Vector3.Distance(aggroMonster.transform.position, actor.transform.position) : -1f):0.0} range={aggroMonster.InAttackRange()} facing={aggroMonster.FacingTarget()} attacking={aggroMonster.GetComponent<Animator>().GetBool("IsAttacking")} key={aggroMonster.monsterData.displayName} attack={CurrentAttackField.GetValue(aggroMonster) != null} timer={aggroMonster.attackTimer:0.00} paused={Fate.isPaused}",
+            trackedHp = Mathf.RoundToInt(monsters.Values.Where(m => m != null).Sum(m => m.hp)), trackedDead = monsters.Values.Count(m => m != null && m.MyVitals.IsDead),
+            hitsSent = hitsSent, hitsApplied = hitsApplied, strikesSent = strikesSent, strikesTaken = strikesTaken, killsSent = killsSent, killsTaken = killsTaken,
+            swingsPlayed = swingsPlayed, castsPlayed = castsPlayed, primaryHp = host != null ? host.hp : 0f, primaryExperience = host != null ? (long)host.experience : 0,
             primaryOnNavMesh = host != null && host.GetComponent<NavMeshAgent>() != null && host.GetComponent<NavMeshAgent>().isOnNavMesh,
             gameScene = SceneLoad.CurrentScene.ToString(),
             activeMeshes = visibleMeshes.Length, meshesSeenByCamera = visibleMeshes.Count(r => r.isVisible),
@@ -547,10 +599,9 @@ public sealed partial class Plugin : BaseUnityPlugin
         {
             var screenPoint = Camera.main.WorldToScreenPoint(actor.transform.position + Vector3.up * 2.4f);
             if (screenPoint.z > 0)
-                GUI.Box(new Rect(screenPoint.x - 70, Screen.height - screenPoint.y - 12, 140, 24), mirroring ? "REMOTE PLAYER" : "CO-OP TEST GUEST");
+                GUI.Box(new Rect(screenPoint.x - 70, Screen.height - screenPoint.y - 12, 140, 24), mirroring ? actor.CharacterName : "CO-OP TEST GUEST");
         }
-        if (remotePet != null && Camera.main != null) DrawEntityLabel(remotePet.transform.position, "REMOTE PET");
-        if (combatMonster != null && Camera.main != null) DrawEntityLabel(combatMonster.transform.position, "SHARED TEST MONSTER | HP " + CombatState().hp + " / " + CombatState().maxHp);
+        if (remotePet != null && Camera.main != null) DrawEntityLabel(remotePet.transform.position, remotePet.CharacterName);
         GUILayout.BeginArea(new Rect(12, 12, 440, 215), GUI.skin.box);
         GUILayout.Label("FATE CO-OP | Grove | instance " + instance.ToUpperInvariant() + " | isolated saves");
         GUILayout.Label(status);
@@ -561,9 +612,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             try { StartRoute(); } catch (Exception e) { SetStatus(e.Message); }
         if (GUILayout.Button("Stop (F10)")) StopRoute();
         GUILayout.EndHorizontal();
-        GUILayout.Label(movementSession ? "One test monster enabled; other monsters and loot protected." : "F11 hides this panel. Prototype test controls.");
-        if (movementSession && isHost && SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && GUILayout.Button("Start / reset shared monster test"))
-            try { StartCombat(); } catch (Exception e) { SetStatus(e.Message); }
+        GUILayout.Label(!sharedSession ? "F11 hides this panel. Prototype test controls." : isHost ? "Shared combat on. Loot drops for the host only." : "Shared combat on. Pickups and chests are host-only for now.");
         GUILayout.Label(link == null ? "Not in co-op." : (isHost ? "Hosting co-op: " : "Joined co-op: ") + (peerConnected ? "partner connected" : "waiting for partner"));
         GUILayout.BeginHorizontal();
         if (link == null && SteamReady && GUILayout.Button("Host Steam co-op"))
@@ -581,8 +630,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         PlayerManager.OnPlayerSpawn -= OnPrimarySpawn;
         EndSession("Game closed.");
         lobbyInvites?.Dispose();
-        RestoreSessionSafety();
-        ResetCombat();
+        LeaveSharedWorld();
         Despawn();
         harmony?.UnpatchSelf();
         runningLock?.Dispose();
@@ -601,11 +649,14 @@ public sealed partial class Plugin : BaseUnityPlugin
         public string scene = "", status = "", campaign = "", gameScene = "", layoutHash = "", worldKey = "", sessionRole = "";
         public int primaryId, guestId, spawnedTotal, aiCallsSuppressed, prototypeActors, renderers, activeMeshes, meshesSeenByCamera, worldEpoch, dungeonDepth, networkAccepted, networkRejected, localPort;
         public Vector3 primaryPosition, guestPosition, guestVelocity;
-        public bool guestOnNavMesh, guestWalking, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, movementSession;
+        public bool guestOnNavMesh, guestWalking, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, sharedSession;
         public string localPetJson = "";
         public int remotePetId, remotePetActors, localPetCount, remotePetMeshes;
         public Vector3 remotePetPosition;
         public string remotePetModel = "";
-        public string combatJson = "";
+        public string remoteName = "", aggro = "";
+        public int monstersTracked, trackedHp, trackedDead, hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, swingsPlayed, castsPlayed;
+        public float primaryHp;
+        public long primaryExperience;
     }
 }

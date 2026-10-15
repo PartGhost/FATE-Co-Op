@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using HarmonyLib;
+using Steamworks;
 using Tableflip;
 using UnityEngine;
 using UnityEngine.AI;
@@ -12,6 +14,16 @@ public sealed partial class Plugin
     private string remotePetModel = "";
     private Vector3 remotePetTarget;
     private float remotePetYaw, remotePetTime;
+    private string remoteProfileJson = "", sentProfileKey = "";
+    private float nextProfileCheck, localSwingSpeed;
+    private int localSwings, localCasts, remoteSwings = -1, remoteCasts = -1, swingsPlayed, castsPlayed;
+    private string localCastSpell = "";
+    [Serializable] private sealed class Profile
+    {
+        public string name = "";
+        public PlayerSaveData player = null!;
+        public List<ItemSaveData> equipment = new List<ItemSaveData>();
+    }
     [Serializable] public sealed class PetSnapshot
     {
         public bool present;
@@ -22,7 +34,6 @@ public sealed partial class Plugin
     private void InstallEntityHooks()
     {
         harmony!.Patch(AccessTools.Method(typeof(Pet), "UpdateAI"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePetAI)));
-        harmony.Patch(AccessTools.Method(typeof(CharacterVitals), "ApplyDamage"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeCombatDamage)));
     }
     private static bool BeforePetAI(Pet __instance) => Active == null || Active.remotePet != __instance;
     private PetSnapshot LocalPetSnapshot()
@@ -35,13 +46,50 @@ public sealed partial class Plugin
     {
         if (!FinitePosition(frame.primaryPosition) || !Finite(frame.primaryYaw)) throw new InvalidOperationException("Invalid player pose.");
         if (!NavMesh.SamplePosition(frame.primaryPosition, out var hit, 2f, NavMesh.AllAreas)) throw new InvalidOperationException("Remote player is outside the navigation mesh.");
-        if (actor == null) Spawn();
+        if (actor == null)
+        {
+            if (remoteProfileJson.Length == 0) return;
+            Spawn();
+        }
         if (!mirroring) StopRoute();
         mirrorTarget = hit.position; mirrorYaw = frame.primaryYaw; lastMirrorTime = Time.unscaledTime; mirroring = true;
-        var pet = JsonUtility.FromJson<PetSnapshot>(frame.petJson);
-        ApplyRemotePet(pet);
-        if (isHost) ApplyRemoteAttack(string.IsNullOrEmpty(frame.attackJson) ? null : JsonUtility.FromJson<AttackIntent>(frame.attackJson), pet);
-        else ApplyCombatSnapshot(JsonUtility.FromJson<CombatSnapshot>(frame.combatJson));
+        ApplyRemotePet(JsonUtility.FromJson<PetSnapshot>(frame.petJson));
+        if (remoteSwings >= 0 && frame.swings != remoteSwings) PlayReplicaSwing(frame.swingSpeed);
+        if (remoteCasts >= 0 && frame.casts != remoteCasts) PlayReplicaCast(frame.castSpell);
+        remoteSwings = frame.swings;
+        remoteCasts = frame.casts;
+    }
+    private static string LocalName() => SteamReady ? SteamFriends.GetPersonaName() : Player.PlayerChar.CharacterName;
+    private void SendProfileIfChanged()
+    {
+        var player = Player.PlayerChar;
+        if (Time.unscaledTime < nextProfileCheck || player == null) return;
+        nextProfileCheck = Time.unscaledTime + 1f;
+        var equipment = player.inventory.Where(item => item != null && Fate.IsItemSlotInEquipmentSlot(item.slotIndex)).Select(item =>
+        {
+            var data = new ItemSaveData();
+            item.FillInstance(data);
+            return data;
+        }).ToList();
+        var name = LocalName();
+        var key = name + JsonUtility.ToJson(new ItemStorage { items = equipment });
+        if (key == sentProfileKey) return;
+        var save = new PlayerSaveData();
+        player.FillPlayerSaveData(ref save);
+        save = save.CreatePartyMemberCopy();
+        save.playerName = name;
+        save.lineage = 0;
+        Send("profile", JsonUtility.ToJson(new Profile { name = name, player = save, equipment = equipment }));
+        sentProfileKey = key;
+    }
+    private void ReceiveProfile(string body)
+    {
+        var profile = JsonUtility.FromJson<Profile>(body);
+        if (profile?.player == null || profile.name.Length == 0 || profile.name.Length > 64 || profile.equipment.Count > 20 || profile.equipment.Any(item => !Fate.IsItemSlotInEquipmentSlot(item.slotIndex)))
+            throw new InvalidOperationException("Invalid partner profile.");
+        remoteProfileJson = body;
+        if (actor != null && mirroring) Despawn(preserveIntent: true);
+        SetStatus(profile.name + " is connected.");
     }
     private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
     private static bool FinitePosition(Vector3 p) => Finite(p.x) && Finite(p.y) && Finite(p.z) && Math.Abs(p.x) < 2000 && Math.Abs(p.y) < 1000 && Math.Abs(p.z) < 2000;
@@ -87,7 +135,7 @@ public sealed partial class Plugin
             var animator = remotePet.GetComponent<Animator>();
             if (animator != null) animator.SetBool("IsWalking", fresh && Vector3.Distance(previous, next) > .001f);
         }
-        UpdateCombatReplica();
+        UpdateMirrors();
     }
     private void DespawnRemotePet()
     {
