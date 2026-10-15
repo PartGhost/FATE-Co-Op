@@ -9,7 +9,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.11.0";
+    internal const string Version = "0.12.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     private const float FrameInterval = 0.05f, PeerTimeout = 10f;
     private IPeerLink? link;

@@ -1,3 +1,9 @@
+# Grove co-op prototype — 0.12.0
+
+## Co-op monster toughness
+
+While the partner is on the host's floor, the host divides all damage to non-pet monsters by `MonsterToughness` (`[Co-op]` in `BepInEx\config\local.fatecoop.prototype.cfg`, default 1.75, minimum 1, read from the host's config). In effect monsters have 1.75× health. Nothing is stored: the saved floor keeps normal health, and solo play is unchanged. XP per kill is unchanged for each player. The reduction applies to every damage source on the host (both players, pets, forwarded hits and effects). Damage over time that bypasses `ApplyDamage` isn't reduced. Measured: a 10-damage effect took off 6 with the partner present.
+
 # Grove co-op prototype — 0.11.0
 
 ## Second audit

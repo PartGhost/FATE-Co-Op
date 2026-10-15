@@ -25,6 +25,7 @@ public sealed partial class Plugin : BaseUnityPlugin
     private string status = "Starting";
     private int spawnCount, suppressedAI;
     private bool showPanel = true, testTools;
+    private float monsterToughness;
     private bool guestWanted, transitioning, worldReady;
     private Coroutine? respawn;
     private int worldEpoch;
@@ -53,6 +54,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             sandboxVerified = true;
             runningLock = new FileStream(Path.Combine(game, "fate-coop-running.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             testTools = Config.Bind("Development", "TestTools", false, "Command files, status telemetry and the F8-F10 test keys.").Value;
+            monsterToughness = Math.Max(1f, Config.Bind("Co-op", "MonsterToughness", 1.75f, "When hosting, how much tougher monsters are while your partner is on the floor. 1 is the same as solo.").Value);
             if (testTools)
             {
                 controlRoot = Path.Combine(workspace, "artifacts", instance == "a" ? "runtime" : "runtime-b");

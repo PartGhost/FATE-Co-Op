@@ -105,6 +105,8 @@ public sealed partial class Plugin
                 var sourceId = data.source != null && data.source.Char is Monster attacker && plugin.monsterIds.TryGetValue(attacker, out var attackerId) ? attackerId : 0;
                 plugin.Send("hurt", string.Join("|", sourceId, data.value, (int)data.damageType, data.isCritical ? 1 : 0));
             }
+            if (target is Monster monster && !monster.IsPet() && data.value > 0 && plugin.PeerInWorld())
+                data.value = Math.Max(1, Mathf.RoundToInt(data.value / plugin.monsterToughness));
             return target != plugin.actor && target != plugin.remotePet;
         }
         if (!(target is Monster mirror) || !plugin.monsterIds.TryGetValue(mirror, out var id)) return true;
