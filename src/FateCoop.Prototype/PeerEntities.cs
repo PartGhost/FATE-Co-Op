@@ -16,7 +16,7 @@ public sealed partial class Plugin
     private float remotePetYaw, remotePetTime;
     private string remoteProfileJson = "", sentProfileKey = "";
     private float nextProfileCheck, localSwingSpeed;
-    private int localSwings, localCasts, remoteSwings = -1, remoteCasts = -1, swingsPlayed, castsPlayed;
+    private int localSwings, localCasts, remoteSwings = -1, remoteCasts = -1, swingsPlayed, castsPlayed, remoteHp, remoteMaxHp, remoteMana, remoteMaxMana;
     private string localCastSpell = "";
     [Serializable] private sealed class Profile
     {
@@ -53,6 +53,7 @@ public sealed partial class Plugin
         }
         if (!mirroring) StopRoute();
         mirrorTarget = hit.position; mirrorYaw = frame.primaryYaw; lastMirrorTime = Time.unscaledTime; mirroring = true;
+        remoteHp = frame.hp; remoteMaxHp = frame.maxHp; remoteMana = frame.mana; remoteMaxMana = frame.maxMana;
         ApplyRemotePet(JsonUtility.FromJson<PetSnapshot>(frame.petJson));
         if (remoteSwings >= 0 && frame.swings != remoteSwings) PlayReplicaSwing(frame.swingSpeed);
         if (remoteCasts >= 0 && frame.casts != remoteCasts) PlayReplicaCast(frame.castSpell);
@@ -141,6 +142,14 @@ public sealed partial class Plugin
     {
         if (remotePet != null) { remotePet.gameObject.SetActive(false); UnityEngine.Object.Destroy(remotePet.gameObject); }
         remotePet = null; remotePetModel = "";
+    }
+    private static void DrawBar(Rect area, int value, int max, Color fill)
+    {
+        GUI.color = Color.black;
+        GUI.DrawTexture(area, Texture2D.whiteTexture);
+        GUI.color = fill;
+        GUI.DrawTexture(new Rect(area.x, area.y, max > 0 ? area.width * Mathf.Clamp01((float)value / max) : 0f, area.height), Texture2D.whiteTexture);
+        GUI.color = Color.white;
     }
     private static void DrawEntityLabel(Vector3 position, string label)
     {

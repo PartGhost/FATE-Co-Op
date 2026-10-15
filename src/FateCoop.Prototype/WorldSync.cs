@@ -27,13 +27,16 @@ public sealed partial class Plugin
     {
         harmony!.Patch(AccessTools.Method(typeof(LevelGenerator), "LoadSaveData"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeLoadFloor)));
         harmony.Patch(AccessTools.Method(typeof(Monster), "UpdateAI"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeMonsterAI)));
+        harmony.Patch(AccessTools.Method(typeof(Fate), "SetPause"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePause)));
     }
+    private static bool BeforePause(bool paused) => !paused || Active == null || !Active.peerConnected;
     private static bool BeforeMonsterAI(Monster __instance)
     {
         var plugin = Active;
         if (plugin == null) return true;
         if (__instance == plugin.remotePet) return false;
-        return !plugin.sharedSession || plugin.isHost || __instance.MyVitals.IsDead || (__instance.HasMaster() && __instance.Master() == Player.PlayerChar);
+        var hostOwned = plugin.monsterIds.ContainsKey(__instance) || plugin.pendingWorld != null || plugin.joiningWorld != null;
+        return !plugin.sharedSession || plugin.isHost || !hostOwned || __instance.MyVitals.IsDead || (__instance.HasMaster() && __instance.Master() == Player.PlayerChar);
     }
     private static void BeforeLoadFloor(LevelGenerator __instance)
     {
@@ -134,4 +137,5 @@ public sealed partial class Plugin
         ResetMonsters();
         ResetGround();
         DespawnRemotePet();
-    }}
+    }
+}

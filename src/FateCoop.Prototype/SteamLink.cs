@@ -55,6 +55,7 @@ internal sealed class SteamLink : IPeerLink
         if (ioFailure || result.m_eResult != EResult.k_EResultOK) { failure = "Steam lobby creation failed: " + result.m_eResult; return; }
         lobby = new CSteamID(result.m_ulSteamIDLobby);
         SteamMatchmaking.SetLobbyData(lobby, VersionKey, Plugin.Compatibility);
+        SteamFriends.SetRichPresence("connect", "+connect_lobby " + lobby.m_SteamID);
         report("Steam lobby ready. Invite a friend with Shift+Tab or the Invite button.");
     }
 
@@ -140,6 +141,7 @@ internal sealed class SteamLink : IPeerLink
     {
         CloseSession();
         if (lobby.IsValid()) SteamMatchmaking.LeaveLobby(lobby);
+        if (host) SteamFriends.ClearRichPresence();
         created.Dispose();
         entered.Dispose();
         membersChanged.Dispose();

@@ -9,7 +9,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.9.0";
+    internal const string Version = "0.10.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     private const float FrameInterval = 0.05f, PeerTimeout = 10f;
     private IPeerLink? link;
@@ -19,6 +19,7 @@ public sealed partial class Plugin
     private string requestedWorld = "";
     private ulong commandLineLobby;
     private Callback<GameLobbyJoinRequested_t>? lobbyInvites;
+    private Callback<GameRichPresenceJoinRequested_t>? presenceJoins;
 
     [Serializable] private sealed class Envelope
     {
@@ -29,16 +30,15 @@ public sealed partial class Plugin
         public string worldKey = "", scene = "";
         public Vector3 primaryPosition = Vector3.zero;
         public float primaryYaw = 0, swingSpeed = 0;
-        public int swings, casts;
+        public int swings, casts, hp, maxHp, mana, maxMana;
         public string petJson = "", castSpell = "";
     }
 
     internal static string Compatibility => Version + "/" + Application.version;
     private static bool SteamReady => AccessTools.StaticFieldRefAccess<SteamManager, bool>("s_EverInitialized");
 
-    private static ulong LobbyFromCommandLine()
+    private static ulong LobbyFromArguments(string[] args)
     {
-        var args = Environment.GetCommandLineArgs();
         var index = Array.IndexOf(args, "+connect_lobby");
         return index >= 0 && index + 1 < args.Length && ulong.TryParse(args[index + 1], out var lobby) ? lobby : 0;
     }
@@ -62,6 +62,11 @@ public sealed partial class Plugin
         if (lobbyInvites == null && SteamReady)
         {
             lobbyInvites = Callback<GameLobbyJoinRequested_t>.Create(request => JoinSteam(request.m_steamIDLobby));
+            presenceJoins = Callback<GameRichPresenceJoinRequested_t>.Create(request =>
+            {
+                var lobby = LobbyFromArguments(request.m_rgchConnect.Split(' '));
+                if (lobby != 0) JoinSteam(new CSteamID(lobby));
+            });
             if (commandLineLobby != 0) JoinSteam(new CSteamID(commandLineLobby));
         }
         if (link == null) return;
@@ -72,7 +77,15 @@ public sealed partial class Plugin
         if (connected != peerConnected)
         {
             peerConnected = connected;
-            if (connected) { sharedSession = true; sentProfileKey = ""; SetStatus("Co-op partner connected."); }
+            if (connected)
+            {
+                sharedSession = true;
+                sentProfileKey = "";
+                sentQuests = "";
+                Fate.SetPause(false);
+                if (isHost) Send("resync", "");
+                SetStatus("Co-op partner connected.");
+            }
             else { DropPeer(); SetStatus("Co-op partner stopped responding."); }
         }
         if (Time.unscaledTime >= nextFrame)
@@ -82,7 +95,7 @@ public sealed partial class Plugin
         }
         if (!peerConnected) return;
         SendProfileIfChanged();
-        if (isHost) { SyncMonsters(); SyncGround(); }
+        if (isHost) { SyncMonsters(); SyncGround(); SyncQuests(); }
         else if (remoteFrame != null) FollowHost(remoteFrame);
     }
 
@@ -93,6 +106,7 @@ public sealed partial class Plugin
         {
             worldKey = SharedWorldReady() ? CurrentWorldKey() : "", scene = SceneLoad.CurrentScene.ToString(),
             primaryPosition = host != null ? host.transform.position : Vector3.zero, primaryYaw = host != null ? host.transform.eulerAngles.y : 0f,
+            hp = host != null ? host.HP() : 0, maxHp = host != null ? host.MaxHP() : 0, mana = host != null ? host.Mana() : 0, maxMana = host != null ? host.MaxMana() : 0,
             petJson = JsonUtility.ToJson(LocalPetSnapshot()), swings = localSwings, swingSpeed = localSwingSpeed, casts = localCasts, castSpell = localCastSpell
         };
     }
@@ -119,7 +133,15 @@ public sealed partial class Plugin
             {
                 case "frame": ReceiveFrame(JsonUtility.FromJson<PeerFrame>(envelope.body)); break;
                 case "world-request":
-                    if (isHost && SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && SharedWorldReady()) Send("world", JsonUtility.ToJson(ExportWorld()));
+                    if (!isHost || SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || !SharedWorldReady()) break;
+                    monsterStates.Clear();
+                    announcedGround.Clear();
+                    announcedFixtures.Clear();
+                    Send("world", JsonUtility.ToJson(ExportWorld()));
+                    break;
+                case "resync":
+                    if (isHost) throw new InvalidOperationException("Only the host asks for a resync.");
+                    ForgetHostWorld();
                     break;
                 case "world":
                     if (isHost) throw new InvalidOperationException("Only the host sends dungeon floors.");
@@ -139,6 +161,9 @@ public sealed partial class Plugin
                 case "drop": ReceiveDrop(envelope.body); break;
                 case "use-fixture": UseFixture(envelope.body); break;
                 case "fixture": ApplyFixture(envelope.body); break;
+                case "quests": ReceiveQuests(envelope.body); break;
+                case "quest-reward": TakeQuestReward(envelope.body); break;
+                case "use-ward": UseWard(envelope.body); break;
                 default: throw new InvalidOperationException("Unknown peer message: " + envelope.type);
             }
         }
@@ -163,11 +188,12 @@ public sealed partial class Plugin
 
     private void FollowHost(PeerFrame host)
     {
-        if (transitioning || Player.PlayerChar == null) return;
-        if (host.worldKey == "GroveTown" && SceneLoad.CurrentScene == Tableflip.Scene.Dungeon)
+        if (transitioning || Player.PlayerChar == null || SceneLoad.CurrentScene != Tableflip.Scene.Dungeon) return;
+        if (host.worldKey == "GroveTown")
         {
-            requestedWorld = "";
-            Execute("town");
+            if (loadedWorldKey.Length == 0) return;
+            ForgetHostWorld();
+            SetStatus("The host went to town. This floor is yours until they come back down.");
         }
         else if (host.scene == Tableflip.Scene.Dungeon.ToString() && host.worldKey.Length > 0 && host.worldKey != CurrentWorldKey() && host.worldKey != requestedWorld)
         {
@@ -177,12 +203,22 @@ public sealed partial class Plugin
         }
     }
 
+    private void ForgetHostWorld()
+    {
+        loadedWorldKey = "";
+        requestedWorld = "";
+        ResetMonsters();
+        ResetGround();
+    }
+
     private void DropPeer()
     {
         Despawn();
         LeaveSharedWorld();
+        if (!isHost) loadedWorldKey = "";
         remoteFrame = null;
         remoteProfileJson = "";
+        partyQuests = "";
         requestedWorld = "";
     }
 

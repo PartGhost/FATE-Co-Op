@@ -21,6 +21,7 @@ function Wait-Pair([int]$Depth) {
 function Send([string]$Command, [string]$Instance = 'a') { & (Join-Path $PSScriptRoot 'Send-PrototypeCommand.ps1') $Command -Instance $Instance }
 $a = Read-State 'a'
 if ($a.gameScene -eq 'Town_Grove') { Send 'enter-dungeon' }
+if ((Read-State 'b').gameScene -eq 'Town_Grove') { Send 'enter-dungeon' 'b' }
 $floor1 = Wait-Pair 1
 Write-Output 'Floor 1: matching maze cells, stairs, world identity and one guest each.'
 $movement = @()
@@ -51,6 +52,7 @@ Send 'next-floor'
 $floor3 = Wait-Pair 3
 Write-Output 'Floor 3: matching layout after another host floor transition.'
 Send 'town'
+Send 'town' 'b'
 $town = Wait-Pair 0
 Write-Output 'Both players returned to Grove and resumed replication.'
 [ordered]@{ floor1=$floor1; movement=$movement; settled=$settled; floor2=$floor2; floor3=$floor3; returnedToGrove=$town; passed=$true } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $workspace 'artifacts\shared-dungeon-verification.json')

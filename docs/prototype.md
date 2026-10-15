@@ -1,3 +1,36 @@
+# Grove co-op prototype — 0.10.0
+
+## Session flow, party quests and audit fixes
+
+- **Rejoining is safe.** When the host's link connects, it sends `resync`. The guest then forgets the host's floor (monster and item IDs, copies) and requests it again. On every `world-request` the host resends all monster states, ground items and chest/barrel states. Before this, a rejoin within the 10-second timeout, or a long freeze on one side, could leave the two sides with different IDs and duplicate monsters.
+- **The guest moves freely.**
+  - The guest stays in town when the host goes down, and is no longer pulled out of a fight when the host goes to town.
+  - Entering the dungeon, or taking stairs alone, lands the guest on the host's current floor.
+  - When the host goes to town, the guest keeps the floor solo: monster control is released and the shared ground copies are removed. The guest joins the host's next floor when the host comes back down.
+  - On the guest, monster AI is frozen only for the host's monsters (or while joining the host's floor), so a floor that isn't shared plays normally.
+- **Party quests.** The host's quests are the party's quests, and kills by either player advance them on the host.
+  - The guest's panel lists them with their floor.
+  - When the host turns one in, the guest gets the same gold, XP and fame, plus a copy of the reward item. If the guest's bag is full, the item drops for the guest alone, not as shared loot.
+  - A guest picking up the host's quest item completes the host's quest.
+  - On the host's floors the guest's own quest system is switched off. This stops the guest's find-item quest items leaking into shared loot, and its quest monsters being spawned and deleted. The guest's own quests stay in its save for solo play.
+  - Escort and herd characters clicked on the guest are forwarded to the host.
+- **Loot fixes.**
+  - Locked chests use the guest's own key.
+  - Gold the guest drops on death lands in the host's world.
+  - Chest and barrel requests can be retried after 2 seconds.
+  - Item drops are blocked while the partner's replica is built (insurance against duplicating their gear).
+  - Guest drops, chests and barrels go to the host only while the guest is on the host's floor or in town with them.
+- **No pausing in co-op.** While connected, nothing pauses the game, so menus, tutorial popups, portals and the death screen no longer freeze the shared world.
+- **Partner vitals and Steam join.**
+  - The partner's label shows red health and blue mana bars.
+  - The host sets Steam rich presence `connect`, so friends can use **Join Game** from the friends list. `GameRichPresenceJoinRequested_t` and `+connect_lobby` both join.
+- **Release clean-up.**
+  - Test tooling (command files, `status.json`/`telemetry.jsonl`, F8–F10) only runs with `TestTools = true` in `BepInEx\config\local.fatecoop.prototype.cfg`. `Build-Prototype.ps1` sets it for both dev copies; the friend kit leaves it off.
+  - The panel lost the old guest test buttons and stopped overwriting statuses.
+  - The plugin is now named "FATE Co-Op".
+
+Tests: `Test-SessionFlow.ps1` (quick rejoin with matching monster counts, guest stairs, guest staying in town, guest keeping the floor when the host leaves) and `Test-SharedQuests.ps1` (party quest list, shared reward on turn-in). Combat, loot, dungeon and movement tests pass. Tests now send both players into the dungeon and back to town.
+
 # Grove co-op prototype — 0.9.0
 
 ## Shared loot

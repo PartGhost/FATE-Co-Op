@@ -30,6 +30,10 @@ try {
     }
     New-Item -ItemType Directory -Force -Path 'test-game\BepInEx\plugins' | Out-Null
     Copy-Item -LiteralPath 'src\FateCoop.Prototype\bin\Release\netstandard2.1\FateCoop.Prototype.dll' -Destination 'test-game\BepInEx\plugins'
+    foreach ($game in @('test-game','test-game-b') | Where-Object { Test-Path -LiteralPath $_ }) {
+        New-Item -ItemType Directory -Force -Path ($game + '\BepInEx\config') | Out-Null
+        [IO.File]::WriteAllText((Join-Path $workspace ($game + '\BepInEx\config\local.fatecoop.prototype.cfg')), "[Development]`nTestTools = true`n")
+    }
     if (Test-Path -LiteralPath 'test-game-b') {
         & $dotnet src\SandboxPatcher\bin\Release\net8.0\SandboxPatcher.dll $workspace (Join-Path $workspace 'test-saves\instance-b') b
         if ($LASTEXITCODE -ne 0) { throw 'Instance B sandbox patching failed.' }

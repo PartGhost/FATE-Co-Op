@@ -100,7 +100,8 @@ public sealed partial class Plugin
                 plugin.Send("hurt", string.Join("|", sourceId, data.value, (int)data.damageType, data.isCritical ? 1 : 0));
             }
             return target != plugin.actor && target != plugin.remotePet;
-        }        if (!(target is Monster mirror) || !plugin.monsterIds.TryGetValue(mirror, out var id)) return true;
+        }
+        if (!(target is Monster mirror) || !plugin.monsterIds.TryGetValue(mirror, out var id)) return true;
         var source = data.source != null ? data.source.Char : null;
         if (data.value > 0 && source != null && (source == Player.PlayerChar || (source.HasMaster() && source.Master() == Player.PlayerChar)))
         {
@@ -187,6 +188,8 @@ public sealed partial class Plugin
         CurrentAttackField.SetValue(__instance, null);
         return false;
     }
+
+    private bool InHostWorld() => !isHost && peerConnected && remoteFrame != null && remoteFrame.worldKey.Length > 0 && remoteFrame.worldKey == CurrentWorldKey();
 
     private bool PeerInWorld() => peerConnected && remoteFrame != null && remoteFrame.worldKey.Length > 0 && remoteFrame.worldKey == CurrentWorldKey() && SharedWorldReady();
 

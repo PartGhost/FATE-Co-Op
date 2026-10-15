@@ -17,7 +17,7 @@ using Object = UnityEngine.Object;
 
 namespace FateCoop.Prototype;
 
-[BepInPlugin("local.fatecoop.prototype", "FATE Co-Op Movement Prototype", Version)]
+[BepInPlugin("local.fatecoop.prototype", "FATE Co-Op", Version)]
 public sealed partial class Plugin : BaseUnityPlugin
 {
     internal static Plugin? Active;
@@ -29,7 +29,7 @@ public sealed partial class Plugin : BaseUnityPlugin
     private string status = "Starting";
     private float nextPoll, nextSnapshot;
     private int spawnCount, suppressedAI;
-    private bool showPanel = true;
+    private bool showPanel = true, testTools;
     private bool guestWanted, transitioning, worldReady;
     private Coroutine? respawn;
     private int worldEpoch;
@@ -59,9 +59,13 @@ public sealed partial class Plugin : BaseUnityPlugin
                 throw new InvalidOperationException("Save isolation check failed: " + actual);
             sandboxVerified = true;
             runningLock = new FileStream(Path.Combine(game, "fate-coop-running.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            controlRoot = Path.Combine(workspace, "artifacts", instance == "a" ? "runtime" : "runtime-b");
-            Directory.CreateDirectory(Path.Combine(controlRoot, "commands"));
-            Directory.CreateDirectory(Path.Combine(controlRoot, "processed"));
+            testTools = Config.Bind("Development", "TestTools", false, "Command files, status telemetry and the F8-F10 test keys.").Value;
+            if (testTools)
+            {
+                controlRoot = Path.Combine(workspace, "artifacts", instance == "a" ? "runtime" : "runtime-b");
+                Directory.CreateDirectory(Path.Combine(controlRoot, "commands"));
+                Directory.CreateDirectory(Path.Combine(controlRoot, "processed"));
+            }
             Active = this;
             Application.runInBackground = true;
             harmony = new Harmony("local.fatecoop.prototype");
@@ -79,8 +83,9 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallEntityHooks();
             InstallCombatHooks();
             InstallLootHooks();
-            commandLineLobby = LobbyFromCommandLine();
-            SetStatus("Ready. Save isolation verified; F8 spawns, F9 walks, F10 stops.");
+            InstallQuestHooks();
+            commandLineLobby = LobbyFromArguments(Environment.GetCommandLineArgs());
+            SetStatus("Ready.");
             Logger.LogInfo("ISOLATION_OK " + actual);
             Snapshot();
         }
@@ -131,6 +136,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         worldEpoch++;
         transitioning = true;
         worldReady = false;
+        if (pendingWorld == null) requestedWorld = "";
         layoutHash = "";
         loadedWorldKey = "";
         ResetMonsters();
@@ -186,12 +192,12 @@ public sealed partial class Plugin : BaseUnityPlugin
             UpdateSession();
             if (keyboard != null)
             {
-                if (keyboard.f8Key.wasPressedThisFrame) { if (actor != null) Despawn(); else Spawn(); }
-                if (keyboard.f9Key.wasPressedThisFrame) StartRoute();
-                if (keyboard.f10Key.wasPressedThisFrame) StopRoute();
+                if (testTools && keyboard.f8Key.wasPressedThisFrame) { if (actor != null) Despawn(); else Spawn(); }
+                if (testTools && keyboard.f9Key.wasPressedThisFrame) StartRoute();
+                if (testTools && keyboard.f10Key.wasPressedThisFrame) StopRoute();
                 if (keyboard.f11Key.wasPressedThisFrame) showPanel = !showPanel;
             }
-            if (Time.unscaledTime >= nextPoll)
+            if (testTools && Time.unscaledTime >= nextPoll)
             {
                 nextPoll = Time.unscaledTime + 0.2f;
                 foreach (var file in Directory.GetFiles(Path.Combine(controlRoot, "commands"), "*.cmd").OrderBy(p => p, StringComparer.Ordinal))
@@ -275,6 +281,16 @@ public sealed partial class Plugin : BaseUnityPlugin
                 var barrel = UnityEngine.Object.FindObjectsOfType<ContainerDestroyable>().Where(b => !b.IsDestroyed).OrderBy(b => (b.transform.position - breaker.transform.position).sqrMagnitude).FirstOrDefault()
                     ?? throw new InvalidOperationException("No intact barrel.");
                 barrel.Destroyed();
+                break;
+            case "test-accept-quest":
+                var giver = UnityEngine.Object.FindObjectsOfType<QuestGiver>().FirstOrDefault() ?? throw new InvalidOperationException("No quest giver here.");
+                var offered = SingletonBehaviour<QuestManager>.Instance.GetQuestForQuestGiver(giver.CharacterName);
+                if (offered.Status == Quest.QuestStatus.None) SingletonBehaviour<QuestManager>.Instance.AcceptQuest(offered, giver.CharacterName);
+                break;
+            case "test-finish-quest":
+                var finished = ActiveQuests().FirstOrDefault(q => q.realmQuestData == null) ?? throw new InvalidOperationException("No side quest to finish.");
+                finished.Status = Quest.QuestStatus.Completed;
+                SingletonBehaviour<QuestManager>.Instance.ClaimRewards(finished.QuestGiverName);
                 break;
             case "test-calm":
                 if (aggroMonster != null && !aggroMonster.MyVitals.IsDead)
@@ -422,7 +438,9 @@ public sealed partial class Plugin : BaseUnityPlugin
             primary = host;
             spawned.name = "FateCoop_Prototype_Guest";
             actor.SetMasterCharacter(host);
-            actor.Init(configuration, new ItemStorage { items = equipment });
+            buildingActor = true;
+            try { actor.Init(configuration, new ItemStorage { items = equipment }); }
+            finally { buildingActor = false; }
             // PartyMember.Init omits gender. Apply the explicit player configuration here.
             var customization = spawned.GetComponentInChildren<CharacterCustomizationDefaults>(true);
             if (customization != null)
@@ -442,7 +460,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             if (!agent.isOnNavMesh) throw new InvalidOperationException("Second character did not bind to the navigation mesh.");
             spawnCount++;
             guestWanted = true;
-            SetStatus("Guest spawned. F9: walking route. F8: despawn.");
+
             Logger.LogInfo($"SPAWN_OK primary={host.GetInstanceID()} guest={actor.GetInstanceID()} position={hit.position} speed={agent.speed} layer={LayerMask.LayerToName(spawned.layer)}");
             Snapshot();
         }
@@ -570,7 +588,6 @@ public sealed partial class Plugin : BaseUnityPlugin
         }
         primary = null;
         remoteSwings = remoteCasts = -1;
-        SetStatus("Guest despawned.");
     }
 
     private void Snapshot()
@@ -602,11 +619,11 @@ public sealed partial class Plugin : BaseUnityPlugin
             remotePetModel = remotePetModel, localPetCount = host != null ? host.GetPetCount() : 0,
             remotePetActors = Object.FindObjectsOfType<Character>().Count(c => c.name == "FateCoop_Remote_Pet"),
             remotePetMeshes = remotePet != null ? remotePet.GetComponentsInChildren<SkinnedMeshRenderer>().Count(r => r.enabled && r.isVisible) : 0,
-            remoteName = actor != null ? actor.CharacterName : "", monstersTracked = monsters.Count, aggro = aggroMonster == null ? "" : $"{aggroMonster.GetAIState()} target={(aggroMonster.Target() != null ? aggroMonster.Target().name : "none")} distance={(actor != null ? Vector3.Distance(aggroMonster.transform.position, actor.transform.position) : -1f):0.0} range={aggroMonster.InAttackRange()} facing={aggroMonster.FacingTarget()} attacking={aggroMonster.GetComponent<Animator>().GetBool("IsAttacking")} key={aggroMonster.monsterData.displayName} attack={CurrentAttackField.GetValue(aggroMonster) != null} timer={aggroMonster.attackTimer:0.00} paused={Fate.isPaused}",
+            remoteName = actor != null ? actor.CharacterName : "", monstersTracked = monsters.Count, worldMonsters = Object.FindObjectsOfType<Monster>().Count(m => !m.IsPet() && m != remotePet), aggro = aggroMonster == null ? "" : $"{aggroMonster.GetAIState()} target={(aggroMonster.Target() != null ? aggroMonster.Target().name : "none")} distance={(actor != null ? Vector3.Distance(aggroMonster.transform.position, actor.transform.position) : -1f):0.0} range={aggroMonster.InAttackRange()} facing={aggroMonster.FacingTarget()} attacking={aggroMonster.GetComponent<Animator>().GetBool("IsAttacking")} key={aggroMonster.monsterData.displayName} attack={CurrentAttackField.GetValue(aggroMonster) != null} timer={aggroMonster.attackTimer:0.00} paused={Fate.isPaused}",
             trackedHp = Mathf.RoundToInt(monsters.Values.Where(m => m != null).Sum(m => m.hp)), trackedDead = monsters.Values.Count(m => m != null && m.MyVitals.IsDead),
             hitsSent = hitsSent, hitsApplied = hitsApplied, strikesSent = strikesSent, strikesTaken = strikesTaken, killsSent = killsSent, killsTaken = killsTaken,
             swingsPlayed = swingsPlayed, castsPlayed = castsPlayed, groundItems = ground.Count(entry => entry.Value != null && (!isHost || announcedGround.Contains(entry.Key))),
-            lootGiven = lootGiven, lootTaken = lootTaken, dropsSent = dropsSent, bagItems = host != null ? host.inventory.Count : 0,
+            lootGiven = lootGiven, lootTaken = lootTaken, questRewardsSent = questRewardsSent, questRewardsTaken = questRewardsTaken, partyQuests = partyQuests, dropsSent = dropsSent, bagItems = host != null ? host.inventory.Count : 0,
             openChests = UnityEngine.Object.FindObjectsOfType<ContainerInteractable>().Count(c => c.IsOpen), brokenBarrels = UnityEngine.Object.FindObjectsOfType<ContainerDestroyable>().Count(b => b.IsDestroyed), primaryHp = host != null ? host.hp : 0f, primaryExperience = host != null ? (long)host.experience : 0,
             primaryOnNavMesh = host != null && host.GetComponent<NavMeshAgent>() != null && host.GetComponent<NavMeshAgent>().isOnNavMesh,
             gameScene = SceneLoad.CurrentScene.ToString(),
@@ -627,20 +644,21 @@ public sealed partial class Plugin : BaseUnityPlugin
         {
             var screenPoint = Camera.main.WorldToScreenPoint(actor.transform.position + Vector3.up * 2.4f);
             if (screenPoint.z > 0)
-                GUI.Box(new Rect(screenPoint.x - 70, Screen.height - screenPoint.y - 12, 140, 24), mirroring ? actor.CharacterName : "CO-OP TEST GUEST");
+            {
+                var label = new Rect(screenPoint.x - 70, Screen.height - screenPoint.y - 12, 140, 24);
+                GUI.Box(label, mirroring ? actor.CharacterName : "CO-OP TEST GUEST");
+                if (mirroring)
+                {
+                    DrawBar(new Rect(label.x, label.yMax + 2, label.width, 6), remoteHp, remoteMaxHp, Color.red);
+                    DrawBar(new Rect(label.x, label.yMax + 9, label.width, 4), remoteMana, remoteMaxMana, new Color(0.25f, 0.5f, 1f));
+                }
+            }
         }
         if (remotePet != null && Camera.main != null) DrawEntityLabel(remotePet.transform.position, remotePet.CharacterName);
-        GUILayout.BeginArea(new Rect(12, 12, 440, 215), GUI.skin.box);
-        GUILayout.Label("FATE CO-OP | Grove | instance " + instance.ToUpperInvariant() + " | isolated saves");
+        GUILayout.BeginArea(new Rect(12, 12, 440, 150), GUI.skin.box);
+        GUILayout.Label("FATE CO-OP " + Version + (testTools ? " | instance " + instance.ToUpperInvariant() : ""));
         GUILayout.Label(status);
-        GUILayout.BeginHorizontal();
-        if (GUILayout.Button(actor != null ? "Despawn (F8)" : "Spawn guest (F8)"))
-            try { if (actor != null) Despawn(); else Spawn(); } catch (Exception e) { SetStatus(e.Message); }
-        if (GUILayout.Button("Walk route (F9)"))
-            try { StartRoute(); } catch (Exception e) { SetStatus(e.Message); }
-        if (GUILayout.Button("Stop (F10)")) StopRoute();
-        GUILayout.EndHorizontal();
-        GUILayout.Label(!sharedSession ? "F11 hides this panel. Prototype test controls." : isHost ? "Shared combat and loot on. You host the world." : "Shared combat and loot on. First to grab gets it.");
+        GUILayout.Label(!sharedSession ? "F11 hides this panel." : isHost ? "Shared combat and loot on. You host the world." : "Shared combat and loot on. First to grab gets it.");
         GUILayout.Label(link == null ? "Not in co-op." : (isHost ? "Hosting co-op: " : "Joined co-op: ") + (peerConnected ? "partner connected" : "waiting for partner"));
         GUILayout.BeginHorizontal();
         if (link == null && SteamReady && GUILayout.Button("Host Steam co-op"))
@@ -649,6 +667,14 @@ public sealed partial class Plugin : BaseUnityPlugin
         if (link != null && GUILayout.Button("Leave co-op")) EndSession("Left co-op.");
         GUILayout.EndHorizontal();
         GUILayout.EndArea();
+        if (!isHost && partyQuests.Length > 0)
+        {
+            var lines = partyQuests.Split('\n');
+            GUILayout.BeginArea(new Rect(12, 166, 440, 30 + 22 * lines.Length), GUI.skin.box);
+            GUILayout.Label("Party quests (the host's):");
+            foreach (var line in lines) GUILayout.Label(line);
+            GUILayout.EndArea();
+        }
     }
 
     private void OnDestroy()
@@ -658,6 +684,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         PlayerManager.OnPlayerSpawn -= OnPrimarySpawn;
         EndSession("Game closed.");
         lobbyInvites?.Dispose();
+        presenceJoins?.Dispose();
         LeaveSharedWorld();
         Despawn();
         harmony?.UnpatchSelf();
@@ -682,8 +709,8 @@ public sealed partial class Plugin : BaseUnityPlugin
         public int remotePetId, remotePetActors, localPetCount, remotePetMeshes;
         public Vector3 remotePetPosition;
         public string remotePetModel = "";
-        public string remoteName = "", aggro = "";
-        public int monstersTracked, trackedHp, trackedDead, hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, swingsPlayed, castsPlayed, groundItems, lootGiven, lootTaken, dropsSent, bagItems, openChests, brokenBarrels;
+        public string remoteName = "", aggro = "", partyQuests = "";
+        public int monstersTracked, worldMonsters, trackedHp, trackedDead, hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, swingsPlayed, castsPlayed, groundItems, lootGiven, lootTaken, questRewardsSent, questRewardsTaken, dropsSent, bagItems, openChests, brokenBarrels;
         public float primaryHp;
         public long primaryExperience;
     }

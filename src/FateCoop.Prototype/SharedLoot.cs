@@ -12,15 +12,17 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    private const float GroundInterval = 0.25f, GroundSettleTime = 0.6f;
+    private const float GroundInterval = 0.25f, GroundSettleTime = 0.6f, FixtureRetryTime = 2f;
+    private static readonly System.Reflection.MethodInfo ChestLockSetter = AccessTools.PropertySetter(typeof(ContainerInteractable), "IsLocked");
     private readonly Dictionary<int, Component> ground = new Dictionary<int, Component>();
     private readonly Dictionary<Component, int> groundIds = new Dictionary<Component, int>();
     private readonly Dictionary<int, float> groundSeen = new Dictionary<int, float>();
     private readonly HashSet<int> announcedGround = new HashSet<int>(), pendingTakes = new HashSet<int>();
-    private readonly HashSet<string> announcedFixtures = new HashSet<string>(), pendingFixtures = new HashSet<string>();
+    private readonly HashSet<string> announcedFixtures = new HashSet<string>();
+    private readonly Dictionary<string, float> fixtureRetry = new Dictionary<string, float>();
     private int nextGroundId = 1, lootGiven, lootTaken, dropsSent;
     private float nextGroundSync;
-    private bool placingReplica;
+    private bool dropLocally, buildingActor;
 
     [Serializable] private sealed class GroundItem
     {
@@ -36,27 +38,56 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(Item), "Drop"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeItemDrop)));
         harmony.Patch(AccessTools.Method(typeof(ContainerInteractable), "Interact"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeChestOpen)));
         harmony.Patch(AccessTools.Method(typeof(ContainerDestroyable), "Destroyed"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeBarrelBreak)));
+        harmony.Patch(AccessTools.Method(typeof(ActiveLevel), "SpawnGoldPile"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeGoldSpawn)));
     }
 
-    private static bool GuestInSession => Active != null && Active.sharedSession && !Active.isHost;
+    private static bool GuestInHostWorld => Active != null && Active.InHostWorld();
 
-    private static bool BeforeItemPickup(DroppedItem __instance) => !GuestInSession || !Active!.RequestTake(__instance);
+    private static bool BeforeItemPickup(DroppedItem __instance) => Active == null || Active.isHost || !Active.RequestTake(__instance);
 
-    private static bool BeforeGoldPickup(GoldPileTrigger __instance, Collider other) => !GuestInSession || other.GetComponent<Player>() == null || !Active!.RequestTake(__instance);
+    private static bool BeforeGoldPickup(GoldPileTrigger __instance, Collider other) => Active == null || Active.isHost || other.GetComponent<Player>() == null || !Active.RequestTake(__instance);
 
     private static bool BeforeItemDrop(Item __instance, Vector3 worldPosStart, ref DroppedItem? __result)
     {
         var plugin = Active;
-        if (!GuestInSession || plugin!.placingReplica) return true;
-        plugin.Send("drop", JsonUtility.ToJson(new GroundItem { position = worldPosStart, item = __instance.GetItemSave() }));
-        plugin.dropsSent++;
+        if (plugin == null || (!plugin.buildingActor && (plugin.dropLocally || !GuestInHostWorld))) return true;
+        if (!plugin.buildingActor)
+        {
+            plugin.Send("drop", JsonUtility.ToJson(new GroundItem { position = worldPosStart, item = __instance.GetItemSave() }));
+            plugin.dropsSent++;
+        }
         __result = null;
         return false;
     }
 
-    private static bool BeforeChestOpen(ContainerInteractable __instance) => !GuestInSession || !Active!.RequestFixture("c", __instance.transform.position);
+    private static bool BeforeGoldSpawn(Vector3 position, int goldAmount)
+    {
+        if (!GuestInHostWorld || goldAmount <= 0) return true;
+        Active!.Send("drop", JsonUtility.ToJson(new GroundItem { position = position, gold = goldAmount }));
+        return false;
+    }
 
-    private static bool BeforeBarrelBreak(ContainerDestroyable __instance) => !GuestInSession || __instance.IsDestroyed || !Active!.RequestFixture("b", __instance.transform.position);
+    private static bool BeforeChestOpen(ContainerInteractable __instance)
+    {
+        if (!GuestInHostWorld || __instance.IsOpen) return true;
+        var position = __instance.transform.position;
+        if (!__instance.IsLocked)
+        {
+            Active!.RequestFixture("c", position);
+            return false;
+        }
+        var key = Player.PlayerChar.inventory.FirstOrDefault(item => item.itemType == ItemType.ChestKey);
+        if (key == null) return true;
+        if (Active!.RequestFixture("k", position)) Player.PlayerChar.RemoveItemFromInventory(key, RemoveItemReason.Consumed);
+        return false;
+    }
+
+    private static bool BeforeBarrelBreak(ContainerDestroyable __instance)
+    {
+        if (!GuestInHostWorld || __instance.IsDestroyed) return true;
+        Active!.RequestFixture("b", __instance.transform.position);
+        return false;
+    }
 
     private bool RequestTake(Component replica)
     {
@@ -68,7 +99,9 @@ public sealed partial class Plugin
     private bool RequestFixture(string kind, Vector3 position)
     {
         var key = FixtureKey(kind, position);
-        if (pendingFixtures.Add(key)) Send("use-fixture", key);
+        if (fixtureRetry.TryGetValue(key, out var retryAt) && Time.unscaledTime < retryAt) return false;
+        fixtureRetry[key] = Time.unscaledTime + FixtureRetryTime;
+        Send("use-fixture", key);
         return true;
     }
 
@@ -125,7 +158,7 @@ public sealed partial class Plugin
         announcedGround.Clear();
         pendingTakes.Clear();
         announcedFixtures.Clear();
-        pendingFixtures.Clear();
+        fixtureRetry.Clear();
         nextGroundId = 1;
     }
 
@@ -185,9 +218,9 @@ public sealed partial class Plugin
         }
         else
         {
-            placingReplica = true;
+            dropLocally = true;
             try { replica = ToItem(entry.item).Drop(entry.position, skipSoundAndDropTween: true); }
-            finally { placingReplica = false; }
+            finally { dropLocally = false; }
             if (LevelGenerator.currentInstance != null) LevelGenerator.currentInstance.RemoveDroppedItem((DroppedItem)replica);
             replica.transform.SetParent(null);
         }
@@ -211,6 +244,7 @@ public sealed partial class Plugin
             return;
         }
         var entry = Describe(id, obj);
+        if (entry.gold == 0) ClaimQuestItem(entry.item);
         RemoveGroundObject(obj);
         ForgetGround(id);
         Send("granted", JsonUtility.ToJson(entry));
@@ -246,20 +280,23 @@ public sealed partial class Plugin
     {
         if (!isHost) throw new InvalidOperationException("Only the host places dropped items.");
         var entry = ReadGroundItem(body);
-        if (entry.gold > 0 || !NavMesh.SamplePosition(entry.position, out var hit, 3f, NavMesh.AllAreas)) throw new InvalidOperationException("Dropped item has no valid place.");
-        ToItem(entry.item).Drop(hit.position);
+        if (!NavMesh.SamplePosition(entry.position, out var hit, 3f, NavMesh.AllAreas)) throw new InvalidOperationException("Dropped item has no valid place.");
+        if (entry.gold > 0) ActiveLevel.SpawnGoldPile(hit.position, entry.gold);
+        else ToItem(entry.item).Drop(hit.position);
     }
 
     private void UseFixture(string body)
     {
         if (!isHost) throw new InvalidOperationException("Only the host opens chests and breaks barrels.");
         var parts = body.Split('|');
-        if (parts.Length != 4 || (parts[0] != "c" && parts[0] != "b")) throw new InvalidOperationException("Invalid fixture.");
+        if (parts.Length != 4 || (parts[0] != "c" && parts[0] != "k" && parts[0] != "b")) throw new InvalidOperationException("Invalid fixture.");
         var position = new Vector3(ParseFloat(parts[1]), ParseFloat(parts[2]), ParseFloat(parts[3]));
-        if (parts[0] == "c")
+        if (parts[0] != "b")
         {
             var chest = Nearest(UnityEngine.Object.FindObjectsOfType<ContainerInteractable>(), position);
-            if (chest != null && !chest.IsOpen) chest.Interact(Player.PlayerChar);
+            if (chest == null || chest.IsOpen) return;
+            if (parts[0] == "k") ChestLockSetter.Invoke(chest, new object[] { false });
+            chest.Interact(Player.PlayerChar);
         }
         else
         {
@@ -274,7 +311,6 @@ public sealed partial class Plugin
         var parts = body.Split('|');
         if (parts.Length != 4) throw new InvalidOperationException("Invalid fixture.");
         var position = new Vector3(ParseFloat(parts[1]), ParseFloat(parts[2]), ParseFloat(parts[3]));
-        pendingFixtures.Remove(body);
         if (parts[0] == "c")
         {
             var chest = Nearest(UnityEngine.Object.FindObjectsOfType<ContainerInteractable>(), position);
