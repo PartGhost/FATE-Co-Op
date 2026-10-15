@@ -114,7 +114,7 @@ public sealed partial class Plugin
         foreach (var questItem in reward.questItems.Where(data => player.inventory.Any(owned => data.MatchesItem(owned))))
             SingletonBehaviour<PlayerStatus>.Instance.RemoveQuestItem(questItem);
         questRewardsTaken++;
-        SetStatus("Party quest done: " + reward.quest + ". You got the reward too.");
+        Notify("Party quest done: " + reward.quest + ". You got the reward too.");
     }
 
     private void UseWard(string body)

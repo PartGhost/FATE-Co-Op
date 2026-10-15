@@ -1,3 +1,20 @@
+# Grove co-op prototype — 0.14.0
+
+## Co-op in the game's own menus
+
+The IMGUI debug panel is gone. Co-op now lives in the game's menus, built by cloning the game's own buttons (the clones' `I2.Loc.Localize` component is removed so the text sticks):
+
+- **Main menu** (Original FATE, `MainMenuUI.Start` postfix): a **Co-op** button under Continue Game opens **Host co-op**, **Join a friend** and **Back**.
+  - **Host co-op** checks for a continue-able character and Steam, opens the Steam lobby, then continues the character.
+  - **Join a friend** opens the Steam friends overlay.
+  - Escape or gamepad B closes the sub-menu.
+- **Auto-continue for invited players.** A guest who accepts an invite while on the Grove main menu goes straight into play with their current character, or is told to pick one.
+- **Escape menu** (`PauseUI.OnMenuButton` postfix, built once): **Host co-op** when not in a session, **Invite friend** (Steam sessions) and **Leave co-op** when in one. The frame grows to fit, and explicit gamepad navigation is rebuilt over the visible buttons each time it opens.
+- **Messages.** Partner joined or left, lobby ready, version mismatch, host went to town, and party quest rewards show as the game's floating white text above the player during play, or as the game's OK prompt on the main menu (queued, one at a time). Internal status still goes to the log and `status.json`.
+- **Overlays.** The partner HUD (bottom-left), the party quest list (above it) and the partner/pet name labels hide while the Escape menu or a prompt is open. The pet label is sized to its text. F11 still hides all co-op overlays.
+
+Dev commands `test-coop-menu` and `test-pause` open the sub-menu and the Escape menu for screenshots. All seven suites pass.
+
 # Grove co-op prototype — 0.13.0
 
 ## Shared visuals, partner HUD and fishing

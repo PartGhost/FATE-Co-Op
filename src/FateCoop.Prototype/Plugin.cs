@@ -80,6 +80,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallLootHooks();
             InstallQuestHooks();
             InstallVisualHooks();
+            InstallMenuHooks();
             commandLineLobby = LobbyFromArguments(Environment.GetCommandLineArgs());
             SetStatus("Ready.");
             Logger.LogInfo("ISOLATION_OK " + actual);
@@ -186,6 +187,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         {
             var keyboard = Keyboard.current;
             UpdateSession();
+            UpdateMenus();
             if (keyboard != null && keyboard.f11Key.wasPressedThisFrame) showPanel = !showPanel;
             if (testTools) UpdateDevTools(keyboard);
             if (actor != null && (primary == null || Player.PlayerChar != primary))
@@ -299,7 +301,7 @@ public sealed partial class Plugin : BaseUnityPlugin
     private void HostSteam()
     {
         if (!SteamReady) throw new InvalidOperationException("Steam is not running for this game.");
-        StartSession(SteamLink.Host(SetStatus), true);
+        StartSession(SteamLink.Host(Notify), true);
     }
 
     private void Despawn(bool preserveIntent = false)
@@ -327,7 +329,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private void OnGUI()
     {
-        if (!enabled || !showPanel) return;
+        if (!enabled || !showPanel || PauseUI.IsShown || PromptUI.IsPromptActive) return;
         if (actor != null && Camera.main != null)
         {
             var screenPoint = Camera.main.WorldToScreenPoint(actor.transform.position + Vector3.up * 2.4f);
@@ -344,22 +346,11 @@ public sealed partial class Plugin : BaseUnityPlugin
         }
         if (remotePet != null && Camera.main != null) DrawEntityLabel(remotePet.transform.position, remotePet.CharacterName);
         DrawPartnerFrame();
-        GUILayout.BeginArea(new Rect(12, 12, 440, 150), GUI.skin.box);
-        GUILayout.Label("FATE CO-OP " + Version + (testTools ? " | instance " + instance.ToUpperInvariant() : ""));
-        GUILayout.Label(status);
-        GUILayout.Label(!sharedSession ? "F11 hides this panel." : isHost ? "Shared combat and loot on. You host the world." : "Shared combat and loot on. First to grab gets it.");
-        GUILayout.Label(link == null ? "Not in co-op." : (isHost ? "Hosting co-op: " : "Joined co-op: ") + (peerConnected ? "partner connected" : "waiting for partner"));
-        GUILayout.BeginHorizontal();
-        if (link == null && SteamReady && GUILayout.Button("Host Steam co-op"))
-            try { HostSteam(); } catch (Exception e) { SetStatus(e.Message); }
-        if (link is SteamLink { CanInvite: true } steam && GUILayout.Button("Invite friend")) steam.Invite();
-        if (link != null && GUILayout.Button("Leave co-op")) EndSession("Left co-op.");
-        GUILayout.EndHorizontal();
-        GUILayout.EndArea();
         if (!isHost && partyQuests.Length > 0)
         {
             var lines = partyQuests.Split('\n');
-            GUILayout.BeginArea(new Rect(12, 166, 440, 30 + 22 * lines.Length), GUI.skin.box);
+            var height = 30 + 22 * lines.Length;
+            GUILayout.BeginArea(new Rect(12, Screen.height - 158 - height, 440, height), GUI.skin.box);
             GUILayout.Label("Party quests (the host's):");
             foreach (var line in lines) GUILayout.Label(line);
             GUILayout.EndArea();
@@ -371,7 +362,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         SceneManager.sceneLoaded -= OnSceneLoaded;
         SceneLoad.OnSceneLoaded -= OnGameSceneLoaded;
         PlayerManager.OnPlayerSpawn -= OnPrimarySpawn;
-        EndSession("Game closed.");
+        EndSession("");
         lobbyInvites?.Dispose();
         presenceJoins?.Dispose();
         LeaveSharedWorld();

@@ -91,10 +91,10 @@ public sealed partial class Plugin
         var profile = JsonUtility.FromJson<Profile>(body);
         if (profile?.player == null || profile.name.Length == 0 || profile.name.Length > 64 || profile.equipment.Count > 20 || profile.equipment.Any(item => !Fate.IsItemSlotInEquipmentSlot(item.slotIndex)))
             throw new InvalidOperationException("Invalid partner profile.");
+        if (remoteProfileJson.Length == 0) Notify(profile.name + " joined your co-op game.");
         remoteProfileJson = body;
         partnerName = profile.name;
         if (actor != null && mirroring) Despawn(preserveIntent: true);
-        SetStatus(profile.name + " is connected.");
     }
     private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
     private static bool FinitePosition(Vector3 p) => Finite(p.x) && Finite(p.y) && Finite(p.z) && Math.Abs(p.x) < 2000 && Math.Abs(p.y) < 1000 && Math.Abs(p.z) < 2000;
@@ -185,6 +185,8 @@ public sealed partial class Plugin
     private static void DrawEntityLabel(Vector3 position, string label)
     {
         var p = Camera.main.WorldToScreenPoint(position + Vector3.up * 1.5f);
-        if (p.z > 0) GUI.Box(new Rect(p.x - 140, Screen.height - p.y - 12, 280, 24), label);
+        if (p.z <= 0) return;
+        var width = GUI.skin.box.CalcSize(new GUIContent(label)).x + 16f;
+        GUI.Box(new Rect(p.x - width / 2f, Screen.height - p.y - 12, width, 24), label);
     }
 }

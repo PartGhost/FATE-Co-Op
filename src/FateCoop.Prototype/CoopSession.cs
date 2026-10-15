@@ -9,7 +9,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.13.0";
+    internal const string Version = "0.14.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     private const float FrameInterval = 0.05f, PeerTimeout = 10f;
     private IPeerLink? link;
@@ -46,16 +46,17 @@ public sealed partial class Plugin
 
     private void StartSession(IPeerLink next, bool host)
     {
-        EndSession("Starting a new co-op session.");
+        EndSession("");
         link = next;
         isHost = host;
         nextFrame = 0;
+        autoContinued = false;
     }
 
     private void JoinSteam(CSteamID lobby)
     {
         if (!SteamReady) throw new InvalidOperationException("Steam is not running for this game.");
-        StartSession(SteamLink.Join(lobby, SetStatus), false);
+        StartSession(SteamLink.Join(lobby, Notify), false);
     }
 
     private void UpdateSession()
@@ -87,7 +88,7 @@ public sealed partial class Plugin
                 if (isHost) Send("resync", "");
                 SetStatus("Co-op partner connected.");
             }
-            else { DropPeer(); SetStatus("Co-op partner stopped responding."); }
+            else { DropPeer(); Notify("Your co-op partner stopped responding."); }
         }
         if (Time.unscaledTime >= nextFrame)
         {
@@ -199,7 +200,7 @@ public sealed partial class Plugin
         {
             if (loadedWorldKey.Length == 0) return;
             ForgetHostWorld();
-            SetStatus("The host went to town. This floor is yours until they come back down.");
+            Notify("The host went to town. This floor is yours until they come back down.");
         }
         else if (host.scene == Tableflip.Scene.Dungeon.ToString() && host.worldKey.Length > 0 && host.worldKey != CurrentWorldKey() && host.worldKey != requestedWorld)
         {
@@ -238,6 +239,6 @@ public sealed partial class Plugin
         peerConnected = false;
         isHost = true;
         lastPeerMessage = float.NegativeInfinity;
-        SetStatus(reason);
+        if (reason.Length > 0) Notify(reason);
     }
 }

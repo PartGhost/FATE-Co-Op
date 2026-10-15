@@ -161,6 +161,8 @@ public sealed partial class Plugin
             case "test-fish":
                 ((Player)(Player.PlayerChar ?? throw new InvalidOperationException("No primary character."))).SetIsFishing(parts.Length < 2 || parts[1] != "off");
                 break;
+            case "test-coop-menu": ShowCoopMenu(parts.Length < 2 || parts[1] != "off"); break;
+            case "test-pause": SingletonBehaviour<PauseUI>.Instance.OnMenuButton(); break;
             case "test-calm":
                 if (aggroMonster != null && !aggroMonster.MyVitals.IsDead)
                 {
