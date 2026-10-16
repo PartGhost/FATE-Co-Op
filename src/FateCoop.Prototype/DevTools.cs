@@ -19,6 +19,32 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const int MainHandSlot = 6;
+    private static readonly AccessTools.FieldRef<LevelGenerator, TemplateData> TemplateRef = AccessTools.FieldRefAccess<LevelGenerator, TemplateData>("activeTemplate");
+    private static readonly AccessTools.FieldRef<LevelGenerator, int> TemplateIndexRef = AccessTools.FieldRefAccess<LevelGenerator, int>("activeTemplateIndex");
+    private static TemplateData? forcedTemplate;
+    private static TemplateData[]? allTemplates;
+
+    private void InstallDevHooks()
+    {
+        harmony!.Patch(AccessTools.Method(typeof(LevelGenerator), "Create"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeLevelCreate)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterLevelCreate)));
+    }
+
+    private static void BeforeLevelCreate(int newLevelDepth, int newLevelRealm)
+    {
+        if (forcedTemplate == null || (SaveData.CurrentSaveData.GetRealmSave((RealmData.RealmId)newLevelRealm).dungeonSave?.dungeons?.Any(floor => floor.depth == newLevelDepth) ?? false)) return;
+        var db = SingletonBehaviour<FateDB>.Instance;
+        allTemplates = db.allTemplates;
+        db.allTemplates = new[] { forcedTemplate };
+        forcedTemplate = null;
+    }
+
+    private static void AfterLevelCreate(LevelGenerator __instance)
+    {
+        if (allTemplates == null) return;
+        SingletonBehaviour<FateDB>.Instance.allTemplates = allTemplates;
+        TemplateIndexRef(__instance) = Array.IndexOf(allTemplates, TemplateRef(__instance));
+        allTemplates = null;
+    }
     private Coroutine? testWalk;
     private float nextPoll, nextSnapshot;
     private Monster? aggroMonster;
@@ -353,10 +379,171 @@ public sealed partial class Plugin
                 if (SingletonBehaviour<StoryUI>.InstanceExists())
                     AccessTools.Method(typeof(StoryUI), "OnContinueButton").Invoke(SingletonBehaviour<StoryUI>.Instance, null);
                 break;
+            case "test-dump":
+                Dump(string.Join(" ", parts, 1, parts.Length - 1));
+                break;
+            case "test-items":
+                var itemType = (ItemType)Enum.Parse(typeof(ItemType), parts[1]);
+                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), SingletonBehaviour<FateDB>.Instance.AllItems.Where(i => i.itemType == itemType).Select(i =>
+                    $"{i.displayName} | ref={i.refId} | icon={i.iconPath} ({i.IconName}) | model={i.modelPath} | rarity={i.rarity} depth={i.minimumDepth}-{i.maximumDepth} | value={i.value} | expansion={i.expansion} | effects=[{string.Join("; ", i.itemEffects.Select(e => $"{e.buffType} {e.value}/{e.value2}/{e.value3} dur={e.duration} {e.activationType} {e.target}"))}] | desc={i.description}"));
+                break;
+            case "test-fixture":
+                var visitor = Player.PlayerChar;
+                var kind = (FixtureKind)Enum.Parse(typeof(FixtureKind), parts[1]);
+                var nearest = FixtureObjects().Where(f => f.kind == kind && f.usable).OrderBy(f => (f.obj.transform.position - visitor.transform.position).sqrMagnitude).FirstOrDefault().obj
+                    ?? throw new InvalidOperationException("No usable " + kind + " here.");
+                NavMesh.SamplePosition(nearest.transform.position, out var nearFixture, 4f, NavMesh.AllAreas);
+                visitor.GetComponent<NavMeshAgent>().Warp(nearFixture.position);
+                if (parts.Length > 2) break;
+                if (nearest is ContainerDestroyable crystalToBreak) crystalToBreak.Destroyed();
+                else ((Cleverous.VaultInventory.InteractableSceneObject)nearest).Interact(visitor);
+                break;
+            case "test-vitals":
+                var share = float.Parse(parts[1], CultureInfo.InvariantCulture) / 100f;
+                Player.PlayerChar.hp = Player.PlayerChar.MaxHP() * share;
+                Player.PlayerChar.mana = Player.PlayerChar.MaxMana() * share;
+                break;
+            case "test-close": SimpleSingletonBehaviour<PlayerUI>.Instance.CloseTabs(); break;
+            case "test-trash":
+                var trasher = Player.PlayerChar;
+                foreach (var junk in trasher.inventory.FindAll(i => i.InInventoryGrid).AsEnumerable().Reverse().Take(int.Parse(parts[1], CultureInfo.InvariantCulture)).ToList()) trasher.RemoveItemFromInventory(junk, RemoveItemReason.Consumed);
+                break;
+            case "test-dead": SetStatus("Dead handlers: " + DeadHandlers()); break;
+            case "test-spin":
+                GameObject.Find(parts[1]).transform.Rotate(Vector3.up, float.Parse(parts[2], CultureInfo.InvariantCulture), Space.World);
+                break;
+            case "test-tooltip":
+                var described = Player.PlayerChar.inventory.First(i => i.itemName == parts[1] || (i.sockedtedItems?.Any(gem => gem.itemName == parts[1]) ?? false));
+                SimpleSingletonBehaviour<PlayerUI>.Instance.Tooltip.ShowTooltip(described, false, Player.PlayerChar);
+                break;
+            case "test-give":
+                var receiver = Player.PlayerChar;
+                if (!receiver.AddItemToInventory(new Item(SingletonBehaviour<FateDB>.Instance.AllItems.First(i => i.displayName == parts[1])), AddItemReason.Loot)) throw new InvalidOperationException("No room for " + parts[1]);
+                break;
+            case "test-socket":
+                var socketer = Player.PlayerChar;
+                var socketed = socketer.inventory.First(i => i.equipped && i.IsInMainHand);
+                socketed.SetIdentified(true);
+                socketed.sockets = Math.Max(socketed.sockets, (socketed.sockedtedItems?.Count ?? 0) + 1);
+                socketed.SocketItem(new Item(SingletonBehaviour<FateDB>.Instance.AllItems.First(i => i.displayName == parts[1])));
+                break;
+            case "test-buff":
+                var buffer = Player.PlayerChar;
+                buffer.activeSpell = SingletonBehaviour<FateDB>.Instance.allSpells.First(s => s != null && Friendly(s) && s.targetType == ItemTarget.User && s.effects != null
+                    && s.effects.Any(e => e != null && e.IsPositive && e.duration > 0 && !UnstretchedEffects.Contains(e.buffType)));
+                buffer.mana = buffer.MaxMana();
+                buffer.TryCastCurrentSpell();
+                SetStatus("Cast " + buffer.activeSpell.spellName);
+                break;
+            case "test-kill-pet":
+                LocalCompanions().OfType<Pet>().First().MyVitals.Die();
+                break;
+            case "test-party-heal":
+                var medic = Player.PlayerChar;
+                medic.activeSpell = SingletonBehaviour<FateDB>.Instance.allSpells.First(s => s != null && s.IsHealSpell() && Friendly(s) && PartyTargets.Contains(s.targetType));
+                medic.mana = Math.Max(medic.MaxMana(), medic.activeSpell.manaCost);
+                medic.stamina = Math.Max(medic.MaxStamina(), medic.activeSpell.staminaCost);
+                medic.TryCastCurrentSpell();
+                SetStatus("Cast " + medic.activeSpell.spellName);
+                break;
+            case "test-hurt-pet":
+                var hurtPet = LocalCompanions().OfType<Pet>().First();
+                hurtPet.MyVitals.ApplyDamage(new CharacterVitals.Damage { value = Mathf.CeilToInt(hurtPet.hp) + 10, damageType = DamageType.Slashing, source = NearestEnemy(hurtPet.transform.position)?.MyVitals });
+                break;
+            case "test-pets":
+                var db = SingletonBehaviour<FateDB>.Instance;
+                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), db.PetProfilePictures.Select(p => $"PICTURE {p.family} | {(p.regular != null ? p.regular.name : "-")} | {(p.shadowed != null ? p.shadowed.name : "-")}")
+                    .Concat(db.allMonsters.Where(m => m != null && m.displayName.IndexOf(parts.Length > 1 ? parts[1] : "", StringComparison.OrdinalIgnoreCase) >= 0).Select(m => $"MONSTER {m.displayName} | family={m.family} | prefab={(m.modelPrefab != null ? m.modelPrefab.name : "-")}")));
+                break;
+            case "test-template":
+                forcedTemplate = parts[1] == "off" ? null : SingletonBehaviour<FateDB>.Instance.allTemplates.First(t => t != null && t.templateName == parts[1]);
+                break;
+            case "test-templates":
+                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), SingletonBehaviour<FateDB>.Instance.allTemplates.Where(t => t != null).Select(t => $"{t.realmId} | {t.templateName} | {string.Join(", ", t.props.Where(p => p != null && p.modelPrefab != null).Select(p => p.modelPrefab.name).Where(n => FixturesByProp.ContainsKey(n) || n.Contains("Campfire")).Distinct())}"));
+                break;
+            case "test-props":
+                var templates = Resources.FindObjectsOfTypeAll<TemplateData>();
+                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), Resources.FindObjectsOfTypeAll<PropData>().Where(p => p.modelPrefab != null).OrderBy(p => p.modelPrefab.name).Select(p =>
+                    $"{p.propName} | {p.modelPrefab.name} | [{string.Join(", ", p.modelPrefab.GetComponentsInChildren<Component>(true).Where(c => c != null && !(c is Transform)).Select(c => c.GetType().Name).Distinct())}] | {string.Join(", ", templates.Where(t => t.props != null && t.props.Contains(p)).Select(t => t.templateName))}"));
+                break;
             case "quit": Application.Quit(); break;
             default: throw new ArgumentException("Unknown prototype command: " + parts[0]);
         }
     }
+
+    private static string BagCheck(Character owner)
+    {
+        var cells = new int[owner.InventoryGridHeight, owner.InventoryGridWidth];
+        foreach (var item in owner.inventory.Where(i => i.InInventoryGrid))
+            for (var row = (item.slotIndex - 20) / owner.InventoryGridWidth; row < (item.slotIndex - 20) / owner.InventoryGridWidth + item.slotsTall; row++)
+            for (var column = (item.slotIndex - 20) % owner.InventoryGridWidth; column < (item.slotIndex - 20) % owner.InventoryGridWidth + item.slotsWide; column++)
+                cells[row, column]++;
+        var all = Enumerable.Range(0, owner.InventoryGridHeight).SelectMany(row => Enumerable.Range(0, owner.InventoryGridWidth).Select(column => (row, column))).ToList();
+        return $"overlaps={all.Count(c => cells[c.row, c.column] > 1)} mismatched={all.Count(c => (cells[c.row, c.column] > 0) == owner.IsSpaceAvailable(c.row, c.column, 1, 1))}";
+    }
+
+    private static string DeadHandlers()
+    {
+        const System.Reflection.BindingFlags any = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly;
+        var owners = Object.FindObjectsOfType<MonoBehaviour>().Where(b => b.gameObject.scene.name == "DontDestroyOnLoad" || b is Character).Cast<object>();
+        var statics = new[] { typeof(Player).Assembly, typeof(SingletonBehaviour<>).Assembly }.SelectMany(AccessTools.GetTypesFromAssembly).Where(t => !t.ContainsGenericParameters)
+            .SelectMany(t => t.GetFields(any | System.Reflection.BindingFlags.Static)).Where(f => typeof(Delegate).IsAssignableFrom(f.FieldType)).Select(f => (field: f, owner: (object?)null));
+        var members = owners.SelectMany(o => o.GetType().GetFields(any | System.Reflection.BindingFlags.Instance).Concat(o.GetType().BaseType?.GetFields(any | System.Reflection.BindingFlags.Instance) ?? Array.Empty<System.Reflection.FieldInfo>())
+            .Where(f => typeof(Delegate).IsAssignableFrom(f.FieldType)).Select(f => (field: f, owner: (object?)o)));
+        var staticRefs = new[] { typeof(Player).Assembly, typeof(SingletonBehaviour<>).Assembly }.SelectMany(AccessTools.GetTypesFromAssembly).Where(t => !t.ContainsGenericParameters)
+            .SelectMany(t => t.GetFields(any | System.Reflection.BindingFlags.Static)).Where(f => !typeof(Delegate).IsAssignableFrom(f.FieldType) && !f.IsLiteral)
+            .SelectMany(f =>
+            {
+                var value = f.GetValue(null);
+                var items = value is Object single ? new object[] { single } : value is System.Collections.IEnumerable list && !(value is string) ? list.Cast<object>().SelectMany(e => e is System.Collections.DictionaryEntry d ? new[] { d.Key, d.Value } : new[] { e }) : Array.Empty<object>();
+                return items.Where(item => item is Object unity && unity == null && !ReferenceEquals(unity, null)).Select(_ => $"{f.DeclaringType.Name}.{f.Name}");
+            });
+        return string.Join("; ", statics.Concat(members)
+            .SelectMany(entry => ((entry.field.GetValue(entry.owner) as Delegate)?.GetInvocationList() ?? Array.Empty<Delegate>()).Where(h => h.Target is Object target && target == null).Select(h => $"{entry.field.DeclaringType.Name}.{entry.field.Name}->{h.Method.DeclaringType?.Name}.{h.Method.Name}"))
+            .Concat(staticRefs).GroupBy(s => s).Select(g => g.Count() > 1 ? $"{g.Key} x{g.Count()}" : g.Key));
+    }
+
+    private static IEnumerable<(Component obj, FixtureKind kind, bool usable)> FixtureObjects() =>
+        Object.FindObjectsOfType<ContainerDestroyable>().Where(c => FixtureOf(c.Item) != null).Select(c => ((Component)c, FixtureKind.Crystal, !c.IsDestroyed))
+            .Concat(Object.FindObjectsOfType<ContainerInteractable>().Where(c => FixtureOf(c.Item) != null).Select(c => ((Component)c, FixtureKind.GoldCart, !c.IsOpen)))
+            .Concat(Object.FindObjectsOfType<FountainInteractable>().Where(f => Campfires.Contains(FountainNameRef(f))).Select(f => ((Component)f, FixtureKind.Campfire, !f.IsUsed)));
+
+    private void Dump(string filter)
+    {
+        var lines = new List<string>();
+        var matches = Resources.FindObjectsOfTypeAll<GameObject>().Where(o => o.name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0).Take(300).ToList();
+        foreach (var match in matches)
+        {
+            lines.Add((match.scene.IsValid() ? "SCENE " + match.scene.name : "ASSET") + " " + PathOf(match.transform));
+            DumpObject(match.transform, lines, 1, 3);
+        }
+        File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), lines);
+        SetStatus($"Dumped {matches.Count} objects matching {filter}");
+    }
+
+    private static void DumpObject(Transform node, List<string> lines, int depth, int maxDepth)
+    {
+        var indent = new string(' ', depth * 2);
+        lines.Add($"{indent}{node.name} active={node.gameObject.activeSelf}/{node.gameObject.activeInHierarchy} layer={LayerMask.LayerToName(node.gameObject.layer)} pos={node.position} local={node.localPosition} scale={node.localScale} lossy={node.lossyScale} rot={node.eulerAngles}");
+        foreach (var component in node.GetComponents<Component>())
+        {
+            if (component == null || component is Transform) continue;
+            var detail = component switch
+            {
+                Renderer r => $" enabled={r.enabled} materials=[{string.Join(", ", r.sharedMaterials.Where(m => m != null).Select(m => m.name + "/" + m.shader.name + "/" + (m.mainTexture != null ? m.mainTexture.name : "-") + "/" + (m.HasProperty("_Color") ? m.color.ToString() : "-")))}]" + (r is SpriteRenderer s ? $" sprite={(s.sprite != null ? s.sprite.name : "-")} color={s.color} size={s.size}" : ""),
+                MeshFilter f => " mesh=" + (f.sharedMesh != null ? f.sharedMesh.name + " bounds=" + f.sharedMesh.bounds : "-"),
+                Collider c => $" enabled={c.enabled} bounds={c.bounds}",
+                MonoBehaviour m when m.GetType().Namespace == nameof(Tableflip) => " enabled=" + m.enabled + " json=" + JsonUtility.ToJson(m),
+                Behaviour b => " enabled=" + b.enabled,
+                _ => ""
+            };
+            lines.Add($"{indent}  [{component.GetType().FullName}]{detail}");
+        }
+        if (depth >= maxDepth) return;
+        foreach (Transform child in node) DumpObject(child, lines, depth + 1, maxDepth);
+    }
+
+    private static string PathOf(Transform node) => node.parent == null ? node.name : PathOf(node.parent) + "/" + node.name;
 
     private IEnumerator TestPrimaryWalk(Vector3 direction)
     {
@@ -420,7 +607,15 @@ public sealed partial class Plugin
             partnerSummons = partners.Values.Sum(p => p.Summons.Count(s => s.Copy != null)),
             mapOpenCells = SingletonBehaviour<MinimapFogGridUI>.InstanceExists() ? FogCellsRef(SingletonBehaviour<MinimapFogGridUI>.Instance)?.Count(open => open) ?? 0 : 0,
             statPoints = player != null ? player.UnusedStatPoint : 0, gold = SingletonBehaviour<PlayerStatus>.InstanceExists() ? (long)SingletonBehaviour<PlayerStatus>.Instance.gold : 0,
-            dungeonFloors = SaveData.CurrentSaveData?.GetRealmSave(RealmData.RealmId.Grove)?.dungeonSave?.dungeons?.Count ?? 0
+            dungeonFloors = SaveData.CurrentSaveData?.GetRealmSave(RealmData.RealmId.Grove)?.dungeonSave?.dungeons?.Count ?? 0,
+            localPet = LocalCompanions().OfType<Pet>().FirstOrDefault() is Pet localPet ? $"{localPet.GetAIState()} hp={localPet.hp:0.0} dead={localPet.MyVitals.IsDead} owned={player!.HasPet(localPet)}" : "",
+            fixtures = string.Join(" ", FixtureObjects().GroupBy(f => f.kind).Select(g => $"{g.Key}={g.Count(f => f.usable)}/{g.Count()}")),
+            replicaImpacts = replicaImpacts, skillPoints = player != null ? player.UnusedSkillPoints : 0,
+            partnerIcon = partner?.MapIcon != null ? partner.MapIcon.sprite.name + " " + ColorUtility.ToHtmlStringRGB(partner.MapIcon.color) : "",
+            partnerPetPortrait = partner?.PetSlot != null && SlotPictureRef(partner.PetSlot).texture != null ? SlotPictureRef(partner.PetSlot).texture.name : "",
+            buffs = player != null && EffectsRef(player).TryGetValue(ActivationType.Usage, out var usage) ? string.Join(",", usage.Where(e => e.Positive && !e.Permanent && e.duration > 0).Select(e => e.BuffType + ":" + e.duration)) : "",
+            bagCheck = player != null ? BagCheck(player) : "", vitals = player != null ? $"{player.hp:0}/{player.MaxHP()} {player.mana:0}/{player.MaxMana()}" : "",
+            template = LevelGenerator.currentInstance != null ? TemplateRef(LevelGenerator.currentInstance)?.templateName ?? "" : ""
         };
         var json = JsonUtility.ToJson(telemetry);
         File.WriteAllText(Path.Combine(controlRoot, "status.json"), json);
@@ -436,7 +631,8 @@ public sealed partial class Plugin
         public bool guestOnNavMesh, guestWalking, guestRunning, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, ownsWorld, followPrompt, inCombat, partnerElsewhere, downed, replicaDown, fateChoice;
         public int remotePetActors, localPetCount, partnerTownPortals, partnerPortals, partnerPlates, rangedRolls, rangedMisses, grazes;
         public bool rangedEquipped;
-        public string townNpcs = "", mainHand = "";
+        public string townNpcs = "", mainHand = "", localPet = "", fixtures = "", template = "", vitals = "", bagCheck = "", partnerIcon = "", partnerPetPortrait = "", buffs = "";
+        public int replicaImpacts, skillPoints;
         public int statPoints, dungeonFloors, friendImpacts, localSummons, partnerSummons, mapOpenCells, bagFreeCells;
         public float bleedOut;
         public long gold;

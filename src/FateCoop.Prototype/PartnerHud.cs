@@ -69,7 +69,7 @@ public sealed partial class Plugin
                 partner.PetSlot = CloneSlot(PetSlotRef(party), blocker);
                 ((PartyPetUI)partner.PetSlot).OnInputBehaviorChange(SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.Instance.LocalInputBehavior);
                 ManaRingRef(partner.PetSlot).fillAmount = 0f;
-                partner.SlotPetModel = "";
+                partner.SlotPetPortrait = null;
             }
             var frame = partner.Frame!;
             partner.Slot.transform.localScale = Vector3.one * scale;
@@ -86,11 +86,9 @@ public sealed partial class Plugin
             partner.PetSlot.transform.localScale = Vector3.one * scale;
             SlotNameRef(partner.PetSlot).text = pet!.name;
             FillRing(partner.PetSlot, pet.hp, pet.maxHp, 0, 0);
-            if (pet.model == partner.SlotPetModel) continue;
-            partner.SlotPetModel = pet.model;
-            var family = SingletonBehaviour<FateDB>.Instance.allMonsters.FirstOrDefault(m => m != null && m.displayName == pet.model)?.family;
-            var picture = SingletonBehaviour<FateDB>.Instance.PetProfilePictures.FirstOrDefault(p => p.family == family);
-            if (picture != null) SlotPictureRef(partner.PetSlot).texture = picture.regular;
+            if (pet.portrait == partner.SlotPetPortrait) continue;
+            partner.SlotPetPortrait = pet.portrait;
+            SlotPictureRef(partner.PetSlot).texture = SingletonBehaviour<FateDB>.Instance.PetProfilePictures.SelectMany(p => new[] { p.regular, p.shadowed }).FirstOrDefault(t => t != null && t.name == pet.portrait);
         }
     }
 

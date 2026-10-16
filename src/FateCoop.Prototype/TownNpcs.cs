@@ -6,6 +6,7 @@ using Cleverous.VaultInventory;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
+using UnityEngine.AI;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using Object = UnityEngine.Object;
@@ -15,20 +16,26 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const ulong RespecGoldPerPoint = 100;
+    private const float GroundSearch = 2f;
+    private const string NpcMarker = "P_Marker_NPC";
+    private static readonly string[] StartupMethods = { "Awake", "OnEnable" };
     private static readonly (NpcGreetings Npc, Tableflip.Scene Home)[] BorrowedNpcs =
     {
         (NpcGreetings.Gort, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.Xander, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.Omar, Tableflip.Scene.Town_Ekbatan),
         (NpcGreetings.LizmotheTraveler, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.XerxestheLibrarian, Tableflip.Scene.Town_Ekbatan),
-        (NpcGreetings.SullivantheReaper, Tableflip.Scene.Town_Temple_Fate2)
-    };
-    private static readonly (NpcGreetings Npc, Vector3 Spot, float Yaw, Action<Plugin> Offer)[] TownServices =
-    {
-        (NpcGreetings.XerxestheLibrarian, new Vector3(-7f, 0f, 7f), 142f, plugin => plugin.OfferRespec()),
-        (NpcGreetings.SullivantheReaper, new Vector3(35f, 0f, -21f), 120f, plugin => plugin.OfferDungeonReset())
+        (NpcGreetings.SakinathePriestess, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.SullivantheReaper, Tableflip.Scene.Town_Temple_Fate2)
     };
     private static readonly Dictionary<Tableflip.Attribute, int> StartingStats = new Dictionary<Tableflip.Attribute, int>
     {
         [Tableflip.Attribute.Strength] = 25, [Tableflip.Attribute.Dexterity] = 20, [Tableflip.Attribute.Vitality] = 25, [Tableflip.Attribute.Magic] = 10
+    };
+    private static readonly Dictionary<Tableflip.Attribute, int> StartingSkills = Enumerable.Range((int)Tableflip.Attribute.SkillSword, Tableflip.Attribute.SkillCharmMagic - Tableflip.Attribute.SkillSword + 1)
+        .ToDictionary(skill => (Tableflip.Attribute)skill, _ => 0);
+    private static readonly (NpcGreetings Npc, Vector3 Spot, float Yaw, Action<Plugin> Offer)[] TownServices =
+    {
+        (NpcGreetings.XerxestheLibrarian, new Vector3(-7f, 0f, 7f), 142f, plugin => OfferRespec(StartingStats, "stat", (player, points) => player.AddUnusedStatPoints(points))),
+        (NpcGreetings.SakinathePriestess, new Vector3(-9.5f, 0f, 9f), 142f, plugin => OfferRespec(StartingSkills, "skill", (player, points) => player.AddUnusedSkillPoints(points))),
+        (NpcGreetings.SullivantheReaper, new Vector3(35f, 0f, -21f), 120f, plugin => plugin.OfferDungeonReset())
     };
     private static readonly AccessTools.FieldRef<NPC, bool> CanMoveRef = AccessTools.FieldRefAccess<NPC, bool>("canMove");
     private static readonly AccessTools.FieldRef<NPC, GameObject[]> PatrolRef = AccessTools.FieldRefAccess<NPC, GameObject[]>("patrolPoints");
@@ -41,14 +48,14 @@ public sealed partial class Plugin
     private void InstallTownNpcHooks()
     {
         var quiet = new HarmonyMethod(typeof(Plugin), nameof(BeforeBorrowedStartup));
-        foreach (var startup in new[]
-        {
-            AccessTools.Method(typeof(RealmQuestGiver), "OnEnable"), AccessTools.Method(typeof(DontDestroy), "Awake"), AccessTools.Method(typeof(Cleverous.Prodigy.ProdigyCamera), "Awake"),
-            AccessTools.Method(typeof(Cleverous.ThatHurtModule.ThatHurt), "Awake"), AccessTools.Method(typeof(Cleverous.Prodigy.Game), "Awake")
-        }) harmony!.Patch(startup, prefix: quiet);
+        foreach (var startup in new[] { typeof(Player).Assembly, typeof(SingletonBehaviour<>).Assembly }.SelectMany(AccessTools.GetTypesFromAssembly)
+            .Where(type => typeof(MonoBehaviour).IsAssignableFrom(type) && !type.ContainsGenericParameters)
+            .SelectMany(type => StartupMethods.Select(name => AccessTools.DeclaredMethod(type, name, Type.EmptyTypes)))
+            .Where(method => method != null && !method.IsAbstract)) harmony!.Patch(startup, prefix: quiet);
     }
 
-    private static bool BeforeBorrowedStartup() => Active == null || !Active.borrowingNpcs;
+    private static bool BeforeBorrowedStartup(Component __instance) =>
+        Active == null || !Active.borrowingNpcs || !BorrowedNpcs.Any(borrowed => (int)borrowed.Home == __instance.gameObject.scene.buildIndex);
 
     private void FurnishTown()
     {
@@ -88,6 +95,7 @@ public sealed partial class Plugin
             if (npcTemplates.ContainsKey(voice.thisNpc) || !BorrowedNpcs.Any(b => b.Npc == voice.thisNpc && (int)b.Home == scene.buildIndex)) continue;
             voice.gameObject.SetActive(false);
             voice.transform.SetParent(npcCache, true);
+            voice.transform.Find(NpcMarker).localPosition = Vector3.zero;
             if (voice.TryGetComponent<RealmQuestGiver>(out var storyteller)) MakeTownService(storyteller);
             npcTemplates[voice.thisNpc] = voice.gameObject;
         }
@@ -121,36 +129,41 @@ public sealed partial class Plugin
                 continue;
             }
             var spot = TownServices.First(s => s.Npc == template.Key);
-            var service = Object.Instantiate(template.Value, spot.Spot, Quaternion.Euler(0f, spot.Yaw, 0f), merchants[0].transform.parent);
+            NavMesh.SamplePosition(spot.Spot, out var ground, GroundSearch, NavMesh.AllAreas);
+            var service = Object.Instantiate(template.Value, ground.position, Quaternion.Euler(0f, spot.Yaw, 0f), merchants[0].transform.parent);
             var icon = merchants[0].GetComponentInChildren<MiniMapIconUI>(true).transform;
-            Object.Instantiate(icon.gameObject, service.transform).transform.localPosition = icon.localPosition;
+            var copy = Object.Instantiate(icon.gameObject, service.transform).transform;
+            copy.localPosition = icon.localPosition;
+            copy.localScale = IconScaleBeforeAwake(icon);
             service.GetComponent<TownService>().Setup(template.Key, () => spot.Offer(this));
             service.SetActive(true);
         }
     }
+
+    private static Vector3 IconScaleBeforeAwake(Transform icon) => icon.localScale * icon.parent.localScale.x;
 
     private static void Ask(string text, Action accepted) =>
         SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw(text, yes => { if (yes) accepted(); }, twoButtons: true);
 
     private static void Tell(string text) => SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw(text, null, twoButtons: false, "OK");
 
-    private void OfferRespec()
+    private static void OfferRespec(Dictionary<Tableflip.Attribute, int> starting, string kind, Action<Character, int> refund)
     {
         var player = Player.PlayerChar;
         var bases = player.attributes.GetSaveData().ToDictionary(a => a.attrib, a => a.baseValue);
-        var spent = StartingStats.Sum(stat => Math.Max(0, bases[stat.Key] - stat.Value));
+        var spent = starting.Sum(start => Math.Max(0, (bases.TryGetValue(start.Key, out var value) ? value : 0) - start.Value));
         var cost = (ulong)spent * RespecGoldPerPoint;
-        if (spent == 0) { Tell("You have no stat points to reset."); return; }
-        if (SingletonBehaviour<PlayerStatus>.Instance.gold < cost) { Tell($"Resetting your {spent} stat points costs {cost} gold."); return; }
-        Ask($"Reset your stats for {cost} gold? You get {spent} points back to spend again.", () => Respec(spent, cost));
+        if (spent == 0) { Tell($"You have no {kind} points to reset."); return; }
+        if (SingletonBehaviour<PlayerStatus>.Instance.gold < cost) { Tell($"Resetting your {spent} {kind} points costs {cost} gold."); return; }
+        Ask($"Reset your {kind}s for {cost} gold? You get {spent} points back to spend again.", () => Respec(starting, spent, cost, refund));
     }
 
-    private static void Respec(int spent, ulong cost)
+    private static void Respec(Dictionary<Tableflip.Attribute, int> starting, int spent, ulong cost, Action<Character, int> refund)
     {
         var player = Player.PlayerChar;
         SingletonBehaviour<PlayerStatus>.Instance.RemoveGold(cost);
-        foreach (var stat in StartingStats) player.attributes.SetBasePoints(stat.Key, stat.Value);
-        player.AddUnusedStatPoints(spent);
+        foreach (var start in starting) player.attributes.SetBasePoints(start.Key, start.Value);
+        refund(player, spent);
         var unworn = player.inventory.Where(item => item.equipped && !player.RequirementsMet(item)).ToList();
         var dropped = new List<Item>();
         foreach (var item in unworn)

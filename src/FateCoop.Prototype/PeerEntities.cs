@@ -13,7 +13,8 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const float InterpolationDelay = 0.12f;
-    private const string PlayerMarker = "P_Marker_Player";
+    private const string PlayerMarker = "P_Marker_Player", PartnerMapIcon = "PlayerIcon";
+    private static readonly AccessTools.FieldRef<Player, GameObject> PetMapIconRef = AccessTools.FieldRefAccess<Player, GameObject>("petMinimapIcon");
     private const int MaxSummons = 16;
     private static readonly AccessTools.FieldRef<Character, List<Character>> PetsRef = AccessTools.FieldRefAccess<Character, List<Character>>("petCharacters");
     private static readonly AccessTools.FieldRef<Character, AIState> AIStateRef = AccessTools.FieldRefAccess<Character, AIState>("eAIState");
@@ -24,7 +25,8 @@ public sealed partial class Plugin
     private sealed class Partner
     {
         internal readonly int Id;
-        internal string Name = "", ProfileJson = "", SlotPetModel = "";
+        internal string Name = "", ProfileJson = "";
+        internal string? SlotPetPortrait;
         internal PeerFrame? Frame;
         internal float LastMessage, ClockOffset;
         internal bool ClockSynced, Down;
@@ -100,7 +102,7 @@ public sealed partial class Plugin
     [Serializable] public sealed class PetSnapshot
     {
         public bool present;
-        public string model = "", name = "";
+        public string model = "", name = "", portrait = "";
         public Vector3 position;
         public float yaw;
         public int hp, maxHp;
@@ -135,7 +137,11 @@ public sealed partial class Plugin
         Player.PlayerChar == null ? Enumerable.Empty<Character>() : PetsRef(Player.PlayerChar).Where(c => c != null && c.gameObject.activeInHierarchy && c.monsterData != null);
 
     private static PetSnapshot Snapshot(Character pet) =>
-        new PetSnapshot { present = true, model = pet.monsterData.displayName, name = pet.CharacterName ?? "Pet", position = pet.transform.position, yaw = pet.transform.eulerAngles.y, hp = pet.HP(), maxHp = pet.MaxHP() };
+        new PetSnapshot
+        {
+            present = true, model = pet.monsterData.displayName, name = pet.CharacterName ?? "Pet", portrait = pet is Pet { profilePicture: { } picture } ? picture.name : "",
+            position = pet.transform.position, yaw = pet.transform.eulerAngles.y, hp = pet.HP(), maxHp = pet.MaxHP()
+        };
 
     private static PetSnapshot LocalPetSnapshot() => LocalCompanions().FirstOrDefault(c => c is Pet) is Character pet ? Snapshot(pet) : new PetSnapshot();
 
@@ -225,6 +231,9 @@ public sealed partial class Plugin
         }
         var marker = player.transform.Find(PlayerMarker);
         if (marker != null) Object.Instantiate(marker.gameObject, actor.transform, false).name = PlayerMarker;
+        partner.MapIcon = actor.GetComponentsInChildren<SpriteRenderer>(true).First(r => r.name == PartnerMapIcon);
+        partner.MapIcon.sprite = PetMapIconRef((Player)player).GetComponent<SpriteRenderer>().sprite;
+        partner.MapIcon.color = PlayerColor(partner.Id);
         actor.SetInvincible();
         actor.SetPositionProper(position);
         actor.SetTarget(null);
@@ -251,6 +260,7 @@ public sealed partial class Plugin
         partner.Fishing = 0;
         partner.Pole = null;
         partner.ArrowLine = null;
+        partner.MapIcon = null;
     }
 
     private void DespawnPartners()

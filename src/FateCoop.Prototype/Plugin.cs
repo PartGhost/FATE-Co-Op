@@ -65,6 +65,11 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallRangedHooks();
             InstallQuestLogHooks();
             InstallTownNpcHooks();
+            InstallAssetHooks();
+            InstallDungeonPropHooks();
+            InstallExperienceGemHooks();
+            InstallBagSortHooks();
+            if (testTools) InstallDevHooks();
             commandLineLobby = LobbyFromArguments(Environment.GetCommandLineArgs());
             SetStatus("Ready.");
             Snapshot();
@@ -90,6 +95,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene, LoadSceneMode mode)
     {
+        PrepareAssets();
         if (borrowingNpcs && mode == LoadSceneMode.Additive) KeepBorrowedNpcs(scene);
         Snapshot();
     }

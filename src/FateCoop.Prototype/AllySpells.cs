@@ -10,6 +10,8 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const float AllyHoverPixels = 70f, AllyAimHeight = 1f;
+    private const int SpellBuffSeconds = 150;
+    private static readonly EffectType[] UnstretchedEffects = { EffectType.HPRecharge, EffectType.ManaRecharge, EffectType.StaminaRecharge, EffectType.Summon, EffectType.SummonWard, EffectType.Transform };
     private static readonly ItemTarget[] PartyTargets = { ItemTarget.UserAndPetsAndParty, ItemTarget.UserAndParty, ItemTarget.UserParty, ItemTarget.MasterOrUserAndPetsAndParty, ItemTarget.MasterOrUserAndParty, ItemTarget.MasterOrUserParty };
     private static readonly ItemTarget[] SelfTargets = { ItemTarget.User, ItemTarget.UserPets, ItemTarget.UserAndPets, ItemTarget.MasterOrUser, ItemTarget.MasterOrUserPets, ItemTarget.MasterOrUserAndPets };
     private static readonly EffectType[] SelfOnlyEffects = { EffectType.Transform, EffectType.RevertTransform, EffectType.OpenPortal, EffectType.Discover };
@@ -19,7 +21,7 @@ public sealed partial class Plugin
     private static bool Shareable(SpellData spell) => spell.effects == null || !spell.effects.Any(effect => effect != null && SelfOnlyEffects.Contains(effect.buffType));
     private Character? redirectTarget;
     private SpellData? redirectSpell;
-    private int friendImpacts;
+    private int friendImpacts, replicaImpacts;
 
     private void InstallAllySpellHooks()
     {
@@ -27,7 +29,15 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(Character), "CompleteSpell"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePartySpell)), finalizer: new HarmonyMethod(typeof(Plugin), nameof(AfterAllySpell)));
         harmony.Patch(AccessTools.Method(typeof(Character), "WasHitBySpell"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeSpellHit)));
         harmony.Patch(AccessTools.Method(typeof(Character), "SpawnImpactVfxForSpellOnSelf"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeSelfImpactVfx)));
+        harmony.Patch(AccessTools.Method(typeof(Character), "AddEffect", new[] { typeof(EffectData), typeof(int), typeof(Character), typeof(int), typeof(bool) }), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterSpellBuff)));
     }
+
+    private static void AfterSpellBuff(Character __instance, AppliedEffect __result, bool isSpellEffect)
+    {
+        if (!isSpellEffect || __result == null || !__result.Positive || __result.Permanent || __result.duration <= 0 || __instance.GetAlignment() == Alignment.Evil || UnstretchedEffects.Contains(__result.BuffType)) return;
+        __result.duration = Math.Max(__result.duration, SpellBuffSeconds);
+    }
+
 
     private bool testShift;
 
@@ -92,8 +102,12 @@ public sealed partial class Plugin
     private static bool BeforeSelfImpactVfx(Character __instance, SpellData chosenSpell, float duration)
     {
         var plugin = Active;
-        if (plugin != null && plugin.VisualOnly && __instance == Player.PlayerChar) plugin.friendImpacts++;
-        if (plugin?.redirectTarget == null || chosenSpell != plugin.redirectSpell || __instance == plugin.redirectTarget) return true;
+        if (plugin == null) return true;
+        if (__instance == Player.PlayerChar && plugin.VisualOnly) plugin.friendImpacts++;
+        if (plugin.PartnerOf(__instance) != null) plugin.replicaImpacts++;
+        if (__instance == Player.PlayerChar && !plugin.VisualOnly && PartyTargets.Contains(chosenSpell.targetType))
+            foreach (var partner in plugin.WorldPartners().Where(p => p.Actor != null && !p.Down)) partner.Actor!.SpawnImpactVfxForSpellOnSelf(chosenSpell, duration);
+        if (plugin.redirectTarget == null || chosenSpell != plugin.redirectSpell || __instance == plugin.redirectTarget) return true;
         plugin.redirectTarget.SpawnImpactVfxForSpellOnSelf(chosenSpell, duration);
         return false;
     }

@@ -91,6 +91,8 @@ public sealed partial class Plugin
         harmony.Patch(RollAttackMethod, prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeRollAttack)));
         harmony.Patch(AccessTools.Method(typeof(CharacterVitals), "Die", new[] { typeof(CharacterVitals.Damage) }), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeVitalsDie)));
         harmony.Patch(AccessTools.Method(typeof(CharacterVitals), "Die", Type.EmptyTypes), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeVitalsQuietDie)));
+        harmony.Patch(AccessTools.Method(typeof(CharacterVitals), "Die", new[] { typeof(CharacterVitals.Damage) }), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePetDie)));
+        harmony.Patch(AccessTools.Method(typeof(CharacterVitals), "Die", Type.EmptyTypes), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePetDie)));
         harmony.Patch(AccessTools.Method(typeof(Character), "UpdatePathing"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeStandInPathing)));
         harmony.Patch(AccessTools.Method(typeof(Monster), "Die", Type.EmptyTypes), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeMonsterDie)));
         harmony.Patch(AccessTools.Method(typeof(Character), "GetDistanceToPlayer"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterDistanceToPlayer)));
@@ -247,6 +249,13 @@ public sealed partial class Plugin
         var killer = plugin.PartnerOf(finalData?.source?.Char ?? plugin.TopThreat(monster))?.Id ?? plugin.myId;
         plugin.SendWorld("kill", string.Join("|", id, monster.GetExperienceReward(), monster.GetFameReward(), killer));
         plugin.killsSent++;
+    }
+
+    private static bool BeforePetDie(CharacterVitals __instance)
+    {
+        if (!(__instance.Char is Pet pet)) return true;
+        pet.hp = Math.Max(pet.hp, 1f);
+        return false;
     }
 
     private static bool BeforeMonsterDie(Monster __instance)

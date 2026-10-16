@@ -20,6 +20,14 @@ public sealed partial class Plugin
         harmony!.Patch(AccessTools.Method(typeof(EnterPortal), "Interact"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePortalUse)));
     }
 
+    private void AddPortalBackFace(FateDB db)
+    {
+        var portal = CopyAsset(db.portalPrefab);
+        var front = portal.GetComponentInChildren<SkinnedMeshRenderer>(true);
+        Object.Instantiate(front.gameObject, front.transform.parent).AddComponent<PortalBackFace>().Front = front;
+        db.portalPrefab = portal;
+    }
+
     private static PortalSaveData? PortalEntry()
     {
         var save = SaveData.CurrentSaveData?.GetRealmSave(Fate.GetDungeonTownRealm(RealmData.RealmId.Grove))?.portalSave?.portalSaves;
@@ -88,5 +96,23 @@ public sealed partial class Plugin
             SceneLoad.LoadAsync(Tableflip.Scene.Dungeon, true);
         }, twoButtons: true, "Yes", "No");
         return false;
+    }
+}
+
+public sealed class PortalBackFace : MonoBehaviour
+{
+    public SkinnedMeshRenderer Front = null!;
+    private SkinnedMeshRenderer back = null!;
+
+    private void Awake() => back = GetComponent<SkinnedMeshRenderer>();
+
+    private void LateUpdate()
+    {
+        var front = Front.transform;
+        transform.localPosition = front.localPosition;
+        transform.localScale = front.localScale;
+        transform.rotation = Quaternion.AngleAxis(180f, Vector3.up) * front.rotation;
+        back.enabled = Front.enabled;
+        for (var i = 0; i < back.sharedMesh.blendShapeCount; i++) back.SetBlendShapeWeight(i, Front.GetBlendShapeWeight(i));
     }
 }

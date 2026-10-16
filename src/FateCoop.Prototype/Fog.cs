@@ -11,7 +11,6 @@ public sealed partial class Plugin
 {
     private const int RevealReach = 2;
     private const float IconLift = 1f;
-    private const string PartnerMapIcon = "PlayerIcon";
     private static readonly AccessTools.FieldRef<MinimapFogGridUI, List<bool>> FogCellsRef = AccessTools.FieldRefAccess<MinimapFogGridUI, List<bool>>("visibility");
     private static readonly AccessTools.FieldRef<MinimapFogGridUI, int> FogWidthRef = AccessTools.FieldRefAccess<MinimapFogGridUI, int>("sizeX");
     private static readonly AccessTools.FieldRef<MinimapFogGridUI, bool> FogClearedRef = AccessTools.FieldRefAccess<MinimapFogGridUI, bool>("removeFog");
@@ -27,14 +26,9 @@ public sealed partial class Plugin
         var hidden = new HashSet<int>();
         foreach (var partner in WorldPartners().Where(p => p.Actor != null))
         {
-            var icon = partner.MapIcon != null ? partner.MapIcon : partner.MapIcon = partner.Actor!.GetComponentsInChildren<SpriteRenderer>(true).FirstOrDefault(r => r.name == PartnerMapIcon);
-            if (icon != null)
-            {
-                var lifted = icon.transform.position;
-                lifted.y = fog.transform.position.y + IconLift;
-                icon.transform.position = lifted;
-                icon.color = PlayerColor(partner.Id);
-            }
+            var lifted = partner.MapIcon!.transform.position;
+            lifted.y = fog.transform.position.y + IconLift;
+            partner.MapIcon.transform.position = lifted;
             if (cells == null || FogClearedRef(fog) || width <= 0) continue;
             var position = partner.Actor!.transform.position;
             var center = maze.GetCellIndexFromPosition((int)position.x, (int)position.z);
