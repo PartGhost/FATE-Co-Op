@@ -8,7 +8,7 @@ $kit = Join-Path $stage 'kit'
 $dotnet = Join-Path $PSScriptRoot 'dotnet'
 $patcher = Join-Path $workspace 'src\SandboxPatcher\bin\Release\net8.0'
 New-Item -ItemType Directory -Force -Path (Join-Path $kit 'bepinex'), (Join-Path $kit 'dotnet\shared'), (Join-Path $kit 'patcher') | Out-Null
-Copy-Item -Path (Join-Path $PSScriptRoot 'kit\*') -Destination $stage
+Copy-Item -Path (Join-Path $PSScriptRoot 'kit\*'), (Join-Path $workspace 'LICENSE') -Destination $stage
 Copy-Item -Path (Join-Path $PSScriptRoot 'bepinex\*') -Destination (Join-Path $kit 'bepinex') -Recurse
 Copy-Item -LiteralPath (Join-Path $dotnet 'dotnet.exe'), (Join-Path $dotnet 'LICENSE.txt'), (Join-Path $dotnet 'ThirdPartyNotices.txt') -Destination (Join-Path $kit 'dotnet')
 Copy-Item -LiteralPath (Join-Path $dotnet 'host') -Destination (Join-Path $kit 'dotnet') -Recurse
