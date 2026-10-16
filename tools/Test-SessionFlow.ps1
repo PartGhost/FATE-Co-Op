@@ -26,6 +26,10 @@ function SameFloor($a, $b) { $a.gameScene -eq 'Dungeon' -and $a.worldKey -ne '' 
 
 if ((State a).gameScene -eq 'Town_Grove') { Send 'enter-dungeon' }
 if ((State b).gameScene -eq 'Town_Grove') { Send 'enter-dungeon' 'b' }
+if ((State a).worldKey -ne (State b).worldKey) {
+    Wait-Pair { param($a, $b) !$b.inCombat -and !$b.transitioning } 'Guest out of combat' 30 | Out-Null
+    Send 'follow-partner' 'b'
+}
 $shared = Wait-Pair { param($a, $b) SameFloor $a $b } 'Shared floor'
 Write-Output ('Shared floor ' + $shared.a.dungeonDepth + ': ' + $shared.a.worldMonsters + ' monsters in each world.')
 
@@ -41,6 +45,7 @@ $stairs = Wait-Pair { param($a, $b) !$b.transitioning -and $b.gameScene -eq 'Dun
 Start-Sleep -Seconds 5
 if ((State b).dungeonDepth -ne $stairs.a.dungeonDepth + 1) { throw 'Guest was pulled back to the host floor.' }
 Write-Output 'Guest took the stairs alone and kept its own floor; the host got a follow prompt.'
+Wait-Pair { param($a, $b) !$a.inCombat } 'Host out of combat' 30 | Out-Null
 Send 'follow-partner' 'a'
 Wait-Pair { param($a, $b) (SameFloor $a $b) -and $a.dungeonDepth -eq $stairs.b.dungeonDepth -and !$a.followPrompt } 'Host following the guest down' | Out-Null
 Write-Output 'Host said yes and both met on the guest''s depth.'
@@ -50,6 +55,7 @@ Wait-Pair { param($a, $b) $b.gameScene -eq 'Town_Grove' -and !$b.transitioning -
 Start-Sleep -Seconds 8
 if ((State b).gameScene -ne 'Town_Grove') { throw 'Guest was pulled out of town.' }
 Write-Output 'Guest stayed in town while the host was in the dungeon.'
+Wait-Pair { param($a, $b) !$b.inCombat } 'Guest out of combat' 30 | Out-Null
 Send 'follow-partner' 'b'
 Wait-Pair { param($a, $b) (SameFloor $a $b) -and !$a.followPrompt } 'Guest going to the host from town' | Out-Null
 Write-Output 'Go to partner took the guest from town onto the host''s floor, and the host''s open prompt closed itself.'

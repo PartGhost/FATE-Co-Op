@@ -17,6 +17,10 @@ function Wait-Pair([scriptblock]$Condition, [string]$What, [int]$Seconds = 20) {
 
 if ((State a).gameScene -eq 'Town_Grove') { Send 'enter-dungeon' }
 if ((State b).gameScene -eq 'Town_Grove') { Send 'enter-dungeon' 'b' }
+if ((State a).worldKey -ne (State b).worldKey) {
+    Wait-Pair { param($a, $b) !$b.inCombat -and !$b.transitioning } 'Guest out of combat' 30 | Out-Null
+    Send 'follow-partner' 'b'
+}
 $start = Wait-Pair { param($a, $b) $a.gameScene -eq 'Dungeon' -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $a.guestId -ne 0 -and $b.guestId -ne 0 } 'Shared floor' 90
 Send 'test-resume' 'a'
 Send 'test-resume' 'b'

@@ -31,31 +31,19 @@ public sealed partial class Plugin : BaseUnityPlugin
     private int worldEpoch;
     private int networkAccepted, networkRejected;
     private bool mirroring;
-    private string instance = "a";
     private FileStream? runningLock;
 
     private void Awake()
     {
-        var sandboxVerified = false;
         try
         {
-            var game = Path.GetFullPath(Paths.GameRootPath);
-            var workspace = Directory.GetParent(game)!.FullName;
-            instance = Path.GetFileName(game) == "test-game-b" ? "b" : "a";
-            var expected = Path.Combine(workspace, "test-saves", "instance-" + instance);
-            if ((Path.GetFileName(game) != "test-game" && Path.GetFileName(game) != "test-game-b") || !File.Exists(Path.Combine(game, "fate-coop-sandbox.json")))
-                throw new InvalidOperationException("Prototype must run from the prepared test-game copy.");
-            var backend = new Tivola.Framework.SaveManagerStandalone();
-            var actual = (string)AccessTools.Method(typeof(Tivola.Framework.SaveManagerStandalone), "GetFilePath").Invoke(backend, new object[] { "isolation-check" });
-            if (!string.Equals(Path.GetDirectoryName(actual), expected, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Save isolation check failed: " + actual);
-            sandboxVerified = true;
-            runningLock = new FileStream(Path.Combine(game, "fate-coop-running.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             testTools = Config.Bind("Development", "TestTools", false, "Command files, status telemetry and the F8-F10 test keys.").Value;
             monsterToughness = Math.Max(1f, Config.Bind("Co-op", "MonsterToughness", 1.75f, "When hosting, how much tougher monsters are while your partner is on the floor. 1 is the same as solo.").Value);
             if (testTools)
             {
-                controlRoot = Path.Combine(workspace, "artifacts", instance == "a" ? "runtime" : "runtime-b");
+                var game = Path.GetFullPath(Paths.GameRootPath);
+                runningLock = new FileStream(Path.Combine(game, "fate-coop-running.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                controlRoot = Path.Combine(Directory.GetParent(game)!.FullName, "artifacts", Path.GetFileName(game) == "test-game-b" ? "runtime-b" : "runtime");
                 Directory.CreateDirectory(Path.Combine(controlRoot, "commands"));
                 Directory.CreateDirectory(Path.Combine(controlRoot, "processed"));
             }
@@ -83,14 +71,12 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallReviveHooks();
             commandLineLobby = LobbyFromArguments(Environment.GetCommandLineArgs());
             SetStatus("Ready.");
-            Logger.LogInfo("ISOLATION_OK " + actual);
             Snapshot();
         }
         catch (Exception exception)
         {
             Logger.LogError(exception);
             enabled = false;
-            if (!sandboxVerified) Application.Quit();
         }
     }
 

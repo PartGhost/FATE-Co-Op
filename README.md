@@ -18,20 +18,20 @@ Online two-player co-op for **FATE: Reawakened** (Original FATE, Grove), played 
 
 ## Requirements
 
-- Windows, Steam, and FATE: Reawakened installed through Steam.
-- Your friend has the same version of this mod. Each release says which one.
+- Windows 10 or 11, Steam, and FATE: Reawakened from Steam.
+- Your friend has the same version of this mod.
 
 ## Install
 
-1. Download `FateCoop-Kit.zip` from the [latest release](../../releases/latest).
-2. Unzip it into a folder outside OneDrive, for example `C:\FATE Co-Op`.
-3. Close FATE, then run `Setup-FateCoop.cmd`. It copies your game (about 3 GB) into a separate co-op copy with the mod. **Your real install and saves are not touched.**
-4. In Steam, right-click FATE Reawakened > Properties > General > Launch Options and paste the line the setup put on your clipboard.
-5. Start FATE from Steam and make a new Original FATE character. The co-op copy keeps its own saves.
+1. Download `FateCoop-Installer.exe` from the [latest release](../../releases/latest).
+2. Close FATE and run it. Windows may say "Windows protected your PC" because the installer isn't code-signed: click **More info**, then **Run anyway**.
+3. It finds FATE through Steam (or click **Change folder...** and pick the folder with `FateReawakened.exe`), then:
+   - **Install** downloads the latest version and adds BepInEx and the mod to your game folder. No game files are changed.
+   - **Update** installs the latest version. You and your friend need the same version, and the installer tells you when a new one is out.
+   - **Remove** takes everything back out (BepInEx stays if other mods use it).
+4. Start FATE from Steam as usual. Co-op uses your normal characters.
 
-After a FATE update, run the setup again. Your co-op character is kept.
-
-To play normal FATE again, clear the launch option. To uninstall, clear it and delete the folder.
+Every install and update first backs up your saves to `Documents\FATE Co-Op save backups`. FATE updates from Steam don't remove the mod. If anything ever goes wrong, Remove the mod, or use Steam's "Verify integrity of game files".
 
 ## Playing
 
@@ -47,7 +47,7 @@ To play normal FATE again, clear the launch option. To uninstall, clear it and d
 | Enter | Chat (Enter sends, Escape cancels) |
 | F11 | Hide the co-op overlays |
 
-`BepInEx\config\local.fatecoop.prototype.cfg` in the co-op copy has a few settings: keyboard movement, camera turn speed and monster toughness.
+`BepInEx\config\local.fatecoop.prototype.cfg` in the game folder has a few settings: keyboard movement, camera turn speed and monster toughness.
 
 ## Known limits
 
@@ -58,9 +58,10 @@ To play normal FATE again, clear the launch option. To uninstall, clear it and d
 ## Development
 
 - `src/FateCoop.Prototype`: the BepInEx plugin.
-- `src/SandboxPatcher`: patches the co-op copy so its saves and settings stay separate from the real game.
-- `tools/`: build, kit and two-instance test scripts. `docs/prototype.md` has the version-by-version design notes.
+- `src/FateCoop.Installer`: the installer (WinForms on the .NET Framework built into Windows).
+- `src/SandboxPatcher`: patches the two local test copies of the game so their saves stay separate. Development only.
+- `tools/`: build, release (`Build-Release.ps1`) and two-instance test scripts. `docs/prototype.md` has the version-by-version design notes.
 
 Builds need the local tool folders listed in `.gitignore` (portable .NET SDK, BepInEx, Mono.Cecil). Game assemblies, decompiled sources and saves are never committed or shipped.
 
-Licensed under [MIT](LICENSE). Bundled third-party components are listed in `tools/kit/THIRD-PARTY-NOTICES.txt`.
+Licensed under [MIT](LICENSE). Bundled third-party components are listed in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).

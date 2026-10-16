@@ -1,4 +1,4 @@
-FATE Co-Op bundles these third-party components. The .NET runtime's license and notices are in kit\dotnet.
+FATE Co-Op ships these third-party components in FateCoop-Mod.zip.
 
 ==============================================================================
 BepInEx (BepInEx folder, winhttp.dll, doorstop)

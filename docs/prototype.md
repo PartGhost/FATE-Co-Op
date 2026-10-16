@@ -1,3 +1,18 @@
+# Grove co-op prototype — 0.16.0
+
+## Installer instead of the game copy
+
+The friend kit (a 3 GB copy of the game, a save-redirecting assembly patch and a Steam launch option) confused players, so it's gone.
+
+- **The mod runs in the real game.** The plugin no longer requires the patched `test-game` copy or checks save isolation at startup. Co-op uses the player's normal characters (the user's choice). The run lock and the test command folders only exist when `TestTools` is on. The two local test copies are still patched by `SandboxPatcher` and checked by `Start-TestGame.ps1`, because two games on one PC need separate saves.
+- **`FateCoop-Installer.exe`** (`src/FateCoop.Installer`, WinForms on .NET Framework 4.8, so nothing extra to install; about 25 KB):
+  - finds FATE from Steam's registry path, `libraryfolders.vdf` and `appmanifest_3030720.acf`, with a folder picker as a fallback;
+  - reads the latest GitHub release and its `FateCoop-Mod.zip` asset;
+  - **Install / Update** refuses to run while FATE is open, backs up `%USERPROFILE%\AppData\LocalLow\Tableflip\FATE Reawakened` to `Documents\FATE Co-Op save backups\<time>`, clears `BepInEx\plugins\FateCoop`, extracts the zip (rejecting paths outside the game folder), and writes `installed.txt` there (the version, then every file it placed);
+  - **Remove** deletes `BepInEx\plugins\FateCoop`, then, only if no other plugins are left, the loader files at the game root from `installed.txt` and the `BepInEx` folder.
+- **Release assets:** `tools\Build-Release.ps1` (was `Build-FriendKit.ps1`) builds `FateCoop-Mod.zip` (the BepInEx loader and core, plus `BepInEx\plugins\FateCoop` with the plugin, `LICENSE` and `THIRD-PARTY-NOTICES.txt`; forward-slash entry names) and `FateCoop-Installer.exe`.
+- The installer's file logic was tested against a throwaway game folder: install, update, removal with and without another BepInEx plugin present, and the GitHub release lookup.
+
 # Grove co-op prototype — 0.15.0
 
 ## Controls

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Text;
 using HarmonyLib;
 using Steamworks;
@@ -9,7 +9,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.15.0";
+    internal const string Version = "0.16.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     private const float FrameInterval = 0.05f, PeerTimeout = 10f;
     private IPeerLink? link;
