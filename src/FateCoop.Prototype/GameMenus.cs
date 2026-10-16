@@ -20,7 +20,7 @@ public sealed partial class Plugin
     private readonly Queue<string> pendingPrompts = new Queue<string>();
     private readonly List<Button> mainMenuButtons = new List<Button>(), coopMenuButtons = new List<Button>();
     private MainMenuUI? mainMenu;
-    private Button? hostPauseButton, invitePauseButton, leavePauseButton;
+    private Button? hostPauseButton, invitePauseButton, partnerPauseButton, leavePauseButton;
     private bool coopMenuOpen, autoContinued;
 
     private void InstallMenuHooks()
@@ -118,16 +118,18 @@ public sealed partial class Plugin
         {
             hostPauseButton = CloneButton(options, "Host co-op", () => { resume.onClick.Invoke(); TryHostSteam(); });
             invitePauseButton = CloneButton(options, "Invite friend", () => { resume.onClick.Invoke(); (link as SteamLink)?.Invite(); });
+            partnerPauseButton = CloneButton(options, "Go to partner", () => { resume.onClick.Invoke(); GoToPartner(); });
             leavePauseButton = CloneButton(options, "Leave co-op", () => { resume.onClick.Invoke(); EndSession("You left co-op."); });
             var index = options.transform.GetSiblingIndex() + 1;
-            foreach (var button in new[] { hostPauseButton, invitePauseButton, leavePauseButton }) button.transform.SetSiblingIndex(index++);
+            foreach (var button in new[] { hostPauseButton, invitePauseButton, partnerPauseButton, leavePauseButton }) button.transform.SetSiblingIndex(index++);
             var content = (RectTransform)options.transform.parent.parent;
-            content.sizeDelta += new Vector2(0f, 2 * PauseButtonHeight);
+            content.sizeDelta += new Vector2(0f, 3 * PauseButtonHeight);
         }
         hostPauseButton.gameObject.SetActive(link == null && SteamReady);
         invitePauseButton!.gameObject.SetActive(link is SteamLink { CanInvite: true });
+        partnerPauseButton!.gameObject.SetActive(PartnerElsewhere());
         leavePauseButton!.gameObject.SetActive(link != null);
-        var order = new[] { saveQuit, options, hostPauseButton, invitePauseButton, leavePauseButton, resume }.Where(button => button.gameObject.activeSelf).ToArray();
+        var order = new[] { saveQuit, options, hostPauseButton, invitePauseButton, partnerPauseButton, leavePauseButton, resume }.Where(button => button.gameObject.activeSelf).ToArray();
         for (var i = 0; i < order.Length; i++)
         {
             var navigation = order[i].navigation;
@@ -160,6 +162,7 @@ public sealed partial class Plugin
         if (coopMenuOpen && ((keyboard != null && keyboard.escapeKey.wasPressedThisFrame) || (gamepad != null && gamepad.buttonEast.wasPressedThisFrame))) ShowCoopMenu(false);
         if (pendingPrompts.Count > 0 && SingletonBehaviour<PromptUI>.InstanceExists() && !PromptUI.IsPromptActive)
             SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw(pendingPrompts.Dequeue(), null, twoButtons: false, "OK");
+        if (partnerPauseButton != null) partnerPauseButton.interactable = !InCombat;
         ContinueForPartner();
     }
 }

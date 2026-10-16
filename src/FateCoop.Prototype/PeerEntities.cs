@@ -12,8 +12,10 @@ public sealed partial class Plugin
 {
     private Character? remotePet;
     private string remotePetModel = "";
-    private Vector3 remotePetTarget;
-    private float remotePetYaw, remotePetTime;
+    private const float InterpolationDelay = 0.12f;
+    private readonly PoseTrail partnerTrail = new PoseTrail(), petTrail = new PoseTrail();
+    private float clockOffset;
+    private bool clockSynced;
     private string remoteProfileJson = "", sentProfileKey = "", partnerName = "";
     private float nextProfileCheck, localSwingSpeed;
     private int localSwings, localCasts, remoteSwings = -1, remoteCasts = -1, swingsPlayed, castsPlayed, remoteHp, remoteMaxHp, remoteMana, remoteMaxMana;
@@ -53,11 +55,13 @@ public sealed partial class Plugin
             Spawn();
         }
         if (!mirroring) StopRoute();
-        mirrorTarget = hit.position; mirrorYaw = frame.primaryYaw; lastMirrorTime = Time.unscaledTime; mirroring = true;
+        partnerTrail.Add(frame.time, hit.position, frame.primaryYaw);
+        mirroring = true;
         remoteHp = frame.hp; remoteMaxHp = frame.maxHp; remoteMana = frame.mana; remoteMaxMana = frame.maxMana;
-        ApplyRemotePet(JsonUtility.FromJson<PetSnapshot>(frame.petJson));
+        ApplyRemotePet(JsonUtility.FromJson<PetSnapshot>(frame.petJson), frame.time);
         if (remoteSwings >= 0 && frame.swings != remoteSwings) PlayReplicaSwing(frame.swingSpeed);
         if (remoteCasts >= 0 && frame.casts != remoteCasts) PlayReplicaCast(frame.castSpell);
+        ShowReplicaDown(frame.hp <= 0 && frame.maxHp > 0);
         remoteSwings = frame.swings;
         remoteCasts = frame.casts;
         PlayReplicaVisuals(frame);
@@ -98,7 +102,27 @@ public sealed partial class Plugin
     }
     private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
     private static bool FinitePosition(Vector3 p) => Finite(p.x) && Finite(p.y) && Finite(p.z) && Math.Abs(p.x) < 2000 && Math.Abs(p.y) < 1000 && Math.Abs(p.z) < 2000;
-    private void ApplyRemotePet(PetSnapshot pet)
+    private float RenderTime => Time.unscaledTime + clockOffset - InterpolationDelay;
+
+    private void SyncClock(float senderTime)
+    {
+        var sample = senderTime - Time.unscaledTime;
+        clockOffset = !clockSynced ? sample : Mathf.Lerp(clockOffset, sample, sample > clockOffset ? 0.5f : 0.02f);
+        clockSynced = true;
+    }
+
+    private static void MoveReplica(Character character, Vector3 target, float yaw, bool live)
+    {
+        var agent = character.GetComponent<NavMeshAgent>();
+        if (agent == null || !agent.enabled || !agent.isOnNavMesh) return;
+        var previous = character.transform.position;
+        agent.Warp(target);
+        character.transform.rotation = Quaternion.Slerp(character.transform.rotation, Quaternion.Euler(0, yaw, 0), 1f - Mathf.Exp(-20f * Time.unscaledDeltaTime));
+        var animator = character.GetComponent<Animator>();
+        if (animator != null) animator.SetBool("IsWalking", live && (target - previous).sqrMagnitude > 0.0001f);
+    }
+
+    private void ApplyRemotePet(PetSnapshot pet, float time)
     {
         if (pet == null || !pet.present) { DespawnRemotePet(); return; }
         if (!FinitePosition(pet.position) || !Finite(pet.yaw) || pet.model.Length > 128 || pet.name.Length > 64) throw new InvalidOperationException("Invalid pet state.");
@@ -124,28 +148,18 @@ public sealed partial class Plugin
             remotePet.SetPositionProper(hit.position);
             Logger.LogInfo("REMOTE_PET_SPAWNED model=" + pet.model + " localPetCount=" + Player.PlayerChar.GetPetCount());
         }
-        remotePetTarget = hit.position; remotePetYaw = pet.yaw; remotePetTime = Time.unscaledTime;
+        petTrail.Add(time, hit.position, pet.yaw);
     }
     private void UpdateRemoteEntities()
     {
-        if (remotePet != null)
-        {
-            var previous = remotePet.transform.position;
-            var fresh = Time.unscaledTime - remotePetTime < .5f;
-            var desired = fresh ? remotePetTarget : previous;
-            var next = Vector3.Distance(previous, desired) > 5 ? desired : Vector3.Lerp(previous, desired, 1 - Mathf.Exp(-25 * Time.unscaledDeltaTime));
-            var agent = remotePet.GetComponent<NavMeshAgent>();
-            if (agent != null && agent.enabled && agent.isOnNavMesh) agent.Warp(next);
-            remotePet.transform.rotation = Quaternion.Slerp(remotePet.transform.rotation, Quaternion.Euler(0, remotePetYaw, 0), 1 - Mathf.Exp(-25 * Time.unscaledDeltaTime));
-            var animator = remotePet.GetComponent<Animator>();
-            if (animator != null) animator.SetBool("IsWalking", fresh && Vector3.Distance(previous, next) > .001f);
-        }
+        if (remotePet != null && petTrail.Sample(RenderTime, out var petPosition, out var petYaw, out var petLive)) MoveReplica(remotePet, petPosition, petYaw, petLive);
         UpdateMirrors();
     }
     private void DespawnRemotePet()
     {
         if (remotePet != null) { remotePet.gameObject.SetActive(false); UnityEngine.Object.Destroy(remotePet.gameObject); }
         remotePet = null; remotePetModel = "";
+        petTrail.Clear();
     }
     private static void DrawBar(Rect area, int value, int max, Color fill) => DrawFill(area, max > 0 ? (float)value / max : 0f, fill);
 
@@ -158,30 +172,6 @@ public sealed partial class Plugin
         GUI.color = Color.white;
     }
 
-    private void DrawPartnerFrame()
-    {
-        if (!peerConnected || remoteFrame == null || partnerName.Length == 0) return;
-        var frame = remoteFrame;
-        var box = new Rect(12, Screen.height - 150, 230, 138);
-        GUI.Box(box, "");
-        var centered = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter };
-        GUI.Label(new Rect(box.x + 8, box.y + 4, box.width - 16, 20), partnerName + "   Lv " + frame.level);
-        var place = frame.hp <= 0 && frame.maxHp > 0 ? "Down" : frame.worldKey == "GroveTown" ? "Grove town" : frame.depth > 0 ? "Floor " + frame.depth : "Travelling";
-        GUI.Label(new Rect(box.x + 8, box.y + 22, box.width - 16, 18), place);
-        var bar = new Rect(box.x + 8, box.y + 44, box.width - 16, 16);
-        DrawBar(bar, frame.hp, frame.maxHp, new Color(0.75f, 0.1f, 0.1f));
-        GUI.Label(bar, frame.hp + " / " + frame.maxHp, centered);
-        bar.y += 20;
-        DrawBar(bar, frame.mana, frame.maxMana, new Color(0.2f, 0.4f, 0.9f));
-        GUI.Label(bar, frame.mana + " / " + frame.maxMana, centered);
-        bar.y += 20;
-        bar.height = 6;
-        DrawFill(bar, frame.xpPercent, new Color(0.9f, 0.75f, 0.2f));
-        var pet = JsonUtility.FromJson<PetSnapshot>(frame.petJson);
-        if (pet == null || !pet.present) return;
-        GUI.Label(new Rect(box.x + 8, box.y + 98, box.width - 16, 18), pet.name);
-        DrawBar(new Rect(box.x + 8, box.y + 118, box.width - 16, 8), pet.hp, pet.maxHp, new Color(0.3f, 0.7f, 0.3f));
-    }
     private static void DrawEntityLabel(Vector3 position, string label)
     {
         var p = Camera.main.WorldToScreenPoint(position + Vector3.up * 1.5f);

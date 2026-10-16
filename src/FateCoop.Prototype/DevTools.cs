@@ -21,6 +21,19 @@ public sealed partial class Plugin
     private float nextPoll, nextSnapshot;
     private Monster? aggroMonster;
 
+    private IEnumerator HoldMove(Vector2 input, float seconds)
+    {
+        testMove = input;
+        yield return new WaitForSecondsRealtime(seconds);
+        testMove = Vector2.zero;
+    }
+
+    private IEnumerator StopTurnNextFrame()
+    {
+        yield return null;
+        testTurn = 0f;
+    }
+
     private static EffectData TestBlast() => new EffectData(EffectType.HP, positive: false, ActivationType.Usage, -900, -10, 0f);
 
     private void UpdateDevTools(Keyboard? keyboard)
@@ -163,6 +176,15 @@ public sealed partial class Plugin
                 break;
             case "test-coop-menu": ShowCoopMenu(parts.Length < 2 || parts[1] != "off"); break;
             case "test-pause": SingletonBehaviour<PauseUI>.Instance.OnMenuButton(); break;
+            case "test-move":
+                if (parts.Length != 4) throw new ArgumentException("test-move <x> <y> <seconds>");
+                StartCoroutine(HoldMove(new Vector2(float.Parse(parts[1], CultureInfo.InvariantCulture), float.Parse(parts[2], CultureInfo.InvariantCulture)), float.Parse(parts[3], CultureInfo.InvariantCulture)));
+                break;
+            case "test-turn":
+                if (parts.Length != 2) throw new ArgumentException("test-turn <degrees>");
+                testTurn = float.Parse(parts[1], CultureInfo.InvariantCulture);
+                StartCoroutine(StopTurnNextFrame());
+                break;
             case "test-calm":
                 if (aggroMonster != null && !aggroMonster.MyVitals.IsDead)
                 {
@@ -208,23 +230,34 @@ public sealed partial class Plugin
             case "enter-dungeon":
                 if (SceneLoad.CurrentScene != Tableflip.Scene.Town_Grove || Player.PlayerChar == null)
                     throw new InvalidOperationException("Dungeon test starts in Grove town.");
-                Player.latestStairsUsedWasDown = true;
-                Player.isEnteringDungeonFromTownDoor = true;
-                SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm = RealmData.RealmId.Grove;
-                SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).SetLastVisitedDungeonDepth(1);
-                SceneLoad.LoadAsync(Tableflip.Scene.Dungeon, true);
+                TravelToFloor(1);
                 break;
             case "next-floor":
                 if (LevelGenerator.currentInstance == null || transitioning) throw new InvalidOperationException("Dungeon is not ready.");
-                Player.latestStairsUsedWasDown = true;
                 Fate.SetPause(true);
-                LevelGenerator.currentInstance.ReplaceDungeon(0, 0, LevelGenerator.currentInstance.GetLevelDepth() + 1, (int)RealmData.RealmId.Grove, true, false);
+                TravelToFloor(LevelGenerator.currentInstance.GetLevelDepth() + 1);
                 break;
-            case "town":
-                if (LevelGenerator.currentInstance == null || transitioning) throw new InvalidOperationException("Dungeon is not ready.");
-                LevelGenerator.currentInstance.UpdateSaveData(false);
-                Town.UpdateSpawnIndex(RealmData.RealmId.Grove, Town.EntryMethod.Stairs);
-                SceneLoad.LoadAsync(Tableflip.Scene.Town_Grove, true);
+            case "town": TravelToTown(); break;
+            case "test-down":
+                if (Player.PlayerChar == null) throw new InvalidOperationException("No primary character.");
+                Player.PlayerChar.MyVitals.Die();
+                break;
+            case "test-near-partner":
+                if (Player.PlayerChar == null || actor == null) throw new InvalidOperationException("No partner replica to walk to.");
+                Player.PlayerChar.GetComponent<NavMeshAgent>().Warp(actor.transform.position + actor.transform.right * 1.5f);
+                break;
+            case "test-chat":
+                SendChat(string.Join(" ", parts, 1, parts.Length - 1));
+                break;
+            case "test-save-quit":
+                AccessTools.Method(typeof(PauseUI), "OnSaveAndQuitButton").Invoke(SingletonBehaviour<PauseUI>.Instance, null);
+                break;
+            case "test-fate-town":
+                AccessTools.Method(typeof(FateChoice), "OnThirdChoice").Invoke(SingletonBehaviour<FateChoiceUI>.Instance.choice, null);
+                break;
+            case "follow-partner":
+                if (followAnswer != null) AnswerPrompt(SingletonBehaviour<PromptUI>.Instance, true);
+                else GoToPartner();
                 break;
             case "menu":
                 if (!SaveData.HasLoaded || Player.PlayerChar != null) throw new InvalidOperationException("Wait for startup, and use menu only before entering gameplay.");
@@ -378,10 +411,10 @@ public sealed partial class Plugin
             swingsPlayed = swingsPlayed, castsPlayed = castsPlayed, groundItems = ground.Count(entry => entry.Value != null && (!isHost || announcedGround.Contains(entry.Key))),
             lootGiven = lootGiven, lootTaken = lootTaken, questRewardsSent = questRewardsSent, questRewardsTaken = questRewardsTaken, effectsSent = effectsSent, effectsTaken = effectsTaken, damagePopups = damagePopups, spellsReplayed = spellsReplayed, arrowsDrawn = arrowsDrawn, levelUpsPlayed = levelUpsPlayed,
             remoteEffects = actor != null && shownEffects.TryGetValue(actor, out var actorEffects) ? string.Join(",", actorEffects) : "", mirrorEffects = shownEffects.Where(entry => entry.Key is Monster).Sum(entry => entry.Value.Count),
-            replicaFishing = replicaFishing, localFishing = LocalFishing(), localWeaponParticles = WeaponParticles(host), replicaWeaponParticles = WeaponParticles(actor), partyQuests = partyQuests, dropsSent = dropsSent, bagItems = host != null ? host.inventory.Count : 0,
+            replicaFishing = replicaFishing, localFishing = LocalFishing(), cameraZoom = Cleverous.Prodigy.ProdigyCamera.Instance != null ? Cleverous.Prodigy.ProdigyCamera.Instance.GameCam.transform.localPosition.z : 0f, cameraYaw = Cleverous.Prodigy.ProdigyCamera.Instance != null ? Cleverous.Prodigy.ProdigyCamera.Instance.transform.eulerAngles.y : 0f, localWeaponParticles = WeaponParticles(host), replicaWeaponParticles = WeaponParticles(actor), partyQuests = partyQuests, dropsSent = dropsSent, bagItems = host != null ? host.inventory.Count : 0,
             openChests = UnityEngine.Object.FindObjectsOfType<ContainerInteractable>().Count(c => c.IsOpen), brokenBarrels = UnityEngine.Object.FindObjectsOfType<ContainerDestroyable>().Count(b => b.IsDestroyed), primaryHp = host != null ? host.hp : 0f, primaryExperience = host != null ? (long)host.experience : 0,
             primaryOnNavMesh = host != null && host.GetComponent<NavMeshAgent>() != null && host.GetComponent<NavMeshAgent>().isOnNavMesh,
-            gameScene = SceneLoad.CurrentScene.ToString(),
+            gameScene = SceneLoad.CurrentScene.ToString(), followPrompt = followAnswer != null, inCombat = InCombat, partnerElsewhere = PartnerElsewhere(), downed = downed, replicaDown = replicaDown, reviveProgress = reviveProgress, chatReceived = chatReceived, lastChat = chatLines.Count > 0 ? chatLines[chatLines.Count - 1].line : "", fateChoice = SingletonBehaviour<FateChoiceUI>.InstanceExists() && FateChoiceUI.FateChoiceActive,
             activeMeshes = visibleMeshes.Length, meshesSeenByCamera = visibleMeshes.Count(r => r.isVisible),
             prototypeActors = Object.FindObjectsOfType<PartyMember>().Count(p => p.name == "FateCoop_Prototype_Guest")
         };
@@ -402,14 +435,17 @@ public sealed partial class Plugin
         public string scene = "", status = "", campaign = "", gameScene = "", layoutHash = "", worldKey = "", sessionRole = "";
         public int primaryId, guestId, spawnedTotal, aiCallsSuppressed, prototypeActors, renderers, activeMeshes, meshesSeenByCamera, worldEpoch, dungeonDepth, networkAccepted, networkRejected, localPort;
         public Vector3 primaryPosition, guestPosition, guestVelocity;
-        public bool guestOnNavMesh, guestWalking, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, sharedSession;
+        public bool guestOnNavMesh, guestWalking, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, sharedSession, followPrompt, inCombat, partnerElsewhere, downed, replicaDown, fateChoice;
+        public float reviveProgress;
+        public int chatReceived;
+        public string lastChat = "";
         public string localPetJson = "";
         public int remotePetId, remotePetActors, localPetCount, remotePetMeshes;
         public Vector3 remotePetPosition;
         public string remotePetModel = "";
         public string remoteName = "", aggro = "", partyQuests = "", remoteEffects = "";
         public int monstersTracked, worldMonsters, trackedHp, trackedDead, hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, swingsPlayed, castsPlayed, groundItems, lootGiven, lootTaken, questRewardsSent, questRewardsTaken, effectsSent, effectsTaken, damagePopups, spellsReplayed, arrowsDrawn, levelUpsPlayed, mirrorEffects, replicaFishing, localFishing, localWeaponParticles, replicaWeaponParticles, dropsSent, bagItems, openChests, brokenBarrels;
-        public float primaryHp;
+        public float primaryHp, cameraZoom, cameraYaw;
         public long primaryExperience;
     }
 }

@@ -22,7 +22,8 @@ public sealed partial class Plugin
     private readonly Dictionary<int, MonsterState> monsterStates = new Dictionary<int, MonsterState>();
     private readonly HashSet<int> attackingMirrors = new HashSet<int>();
     private int nextMonsterId = 1;
-    private float nextMonsterSync;
+    private float nextMonsterSync, nextMonsterRefresh;
+    private const float FullRefreshInterval = 5f;
     private bool applyingStrike, confirmingDeath;
     private int hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, effectsSent, effectsTaken;
 
@@ -98,6 +99,7 @@ public sealed partial class Plugin
         var plugin = Active;
         if (plugin == null || !plugin.sharedSession) return true;
         var target = __instance.Char;
+        if (target == Player.PlayerChar && data.value > 0) plugin.lastCombatTime = Time.unscaledTime;
         if (plugin.isHost)
         {
             if (target == plugin.actor && data.value > 0 && (data.source == null || data.source.Alignment != __instance.Alignment) && plugin.PeerInWorld())
@@ -190,7 +192,7 @@ public sealed partial class Plugin
     private static void AfterFindCharacter(LevelGenerator __instance, Transform transformation, Alignment alignment, float motionRadius, float coneRadius, float radius, ref Character __result)
     {
         var plugin = Active;
-        if (__result != null || plugin == null || !plugin.isHost || !plugin.sharedSession || plugin.actor == null) return;
+        if (__result != null || plugin == null || !plugin.isHost || !plugin.sharedSession || plugin.actor == null || !plugin.actor.Alive()) return;
         var mask = ~((1 << LayerMask.NameToLayer("Player")) | (1 << LayerMask.NameToLayer("Player Damagable")));
         if (LineOfSight(__instance, plugin.actor, alignment, transformation, motionRadius, coneRadius, radius, mask)) __result = plugin.actor;
     }
@@ -200,6 +202,7 @@ public sealed partial class Plugin
         var plugin = Active;
         if (plugin == null || __instance != Player.PlayerChar) return;
         plugin.localSwings++;
+        plugin.lastCombatTime = Time.unscaledTime;
         plugin.localSwingSpeed = __instance.attackTimer;
     }
 
@@ -208,6 +211,7 @@ public sealed partial class Plugin
         var plugin = Active;
         if (plugin == null || __instance != Player.PlayerChar || __instance.activeSpell == null) return;
         plugin.localCasts++;
+        plugin.lastCombatTime = Time.unscaledTime;
         plugin.localCastSpell = __instance.activeSpell.spellName;
     }
 
@@ -316,7 +320,11 @@ public sealed partial class Plugin
         nextMonsterSync = Time.unscaledTime + MonsterInterval;
         if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || !SharedWorldReady()) return;
         var inWorld = PeerInWorld();
-        if (!inWorld) monsterStates.Clear();
+        if (!inWorld || Time.unscaledTime >= nextMonsterRefresh)
+        {
+            monsterStates.Clear();
+            nextMonsterRefresh = Time.unscaledTime + FullRefreshInterval;
+        }
         var lines = new List<string>();
         var seen = new HashSet<int>();
         foreach (var monster in LiveMonsters())

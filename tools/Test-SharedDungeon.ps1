@@ -19,6 +19,14 @@ function Wait-Pair([int]$Depth) {
     throw ('Shared floor timed out: A=' + ($a | ConvertTo-Json -Compress) + ' B=' + ($b | ConvertTo-Json -Compress))
 }
 function Send([string]$Command, [string]$Instance = 'a') { & (Join-Path $PSScriptRoot 'Send-PrototypeCommand.ps1') $Command -Instance $Instance }
+function Wait-Follow {
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    while (!(Read-State 'b').followPrompt) {
+        if ([DateTime]::UtcNow -gt $deadline) { throw 'Guest never got the follow prompt.' }
+        Start-Sleep -Milliseconds 400
+    }
+    Send 'follow-partner' 'b'
+}
 $a = Read-State 'a'
 if ($a.gameScene -eq 'Town_Grove') { Send 'enter-dungeon' }
 if ((Read-State 'b').gameScene -eq 'Town_Grove') { Send 'enter-dungeon' 'b' }
@@ -46,9 +54,11 @@ function Distance($u,$v) { [Math]::Sqrt([Math]::Pow($u.x-$v.x,2)+[Math]::Pow($u.
 if ((Distance $settled.a.guestPosition $settled.b.primaryPosition) -gt .25 -or (Distance $settled.b.guestPosition $settled.a.primaryPosition) -gt .25) { throw 'Replicas did not converge after movement.' }
 Write-Output 'Independent movement and converged replicas passed on floor 1.'
 Send 'next-floor'
+Wait-Follow
 $floor2 = Wait-Pair 2
 Write-Output 'Floor 2: joining instance followed the host and matched the layout.'
 Send 'next-floor'
+Wait-Follow
 $floor3 = Wait-Pair 3
 Write-Output 'Floor 3: matching layout after another host floor transition.'
 Send 'town'

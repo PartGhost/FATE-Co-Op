@@ -10,7 +10,7 @@ namespace FateCoop.Prototype;
 internal interface IPeerLink : IDisposable
 {
     string CloseReason { get; }
-    void Send(byte[] message);
+    void Send(byte[] message, bool reliable);
     bool TryReceive(out byte[] message);
 }
 
@@ -83,7 +83,7 @@ internal sealed class LocalLink : IPeerLink
         }
     }
 
-    public void Send(byte[] message)
+    public void Send(byte[] message, bool reliable)
     {
         var current = client;
         if (current == null) return;

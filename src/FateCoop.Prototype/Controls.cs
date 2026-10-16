@@ -1,0 +1,92 @@
+using System.Linq;
+using Cleverous.Prodigy;
+using Cleverous.Prodigy.Input;
+using HarmonyLib;
+using Tableflip;
+using UnityEngine;
+using UnityEngine.AI;
+using UnityEngine.InputSystem;
+
+namespace FateCoop.Prototype;
+
+public sealed partial class Plugin
+{
+    private const float KeyboardStep = 1.5f;
+    private static readonly string[] CameraKeys = { "<Keyboard>/w", "<Keyboard>/s", "<Keyboard>/a", "<Keyboard>/d" };
+    private static readonly AccessTools.FieldRef<InputBroker, NavMeshAgent> BrokerAgent = AccessTools.FieldRefAccess<InputBroker, NavMeshAgent>("m_navMeshAgent");
+    private static readonly AccessTools.FieldRef<InputBroker, bool> BrokerMovementLocked = AccessTools.FieldRefAccess<InputBroker, bool>("movementLocked");
+    private static readonly AccessTools.FieldRef<InputBroker, bool> BrokerAttackWhenInRange = AccessTools.FieldRefAccess<InputBroker, bool>("attackWhenInRange");
+    private static readonly AccessTools.FieldRef<InputBroker, bool> BrokerInteractWhenInRange = AccessTools.FieldRefAccess<InputBroker, bool>("interactWhenInRange");
+    private static readonly System.Reflection.MethodInfo ZoomInputSetter = AccessTools.PropertySetter(typeof(InputBroker), "CameraZoomInputValue");
+    private static readonly AccessTools.FieldRef<ProdigyCamera, Quaternion> CameraOriginalRotation = AccessTools.FieldRefAccess<ProdigyCamera, Quaternion>("originalRotation");
+    private static readonly AccessTools.FieldRef<ProdigyCamera, float> CameraOriginalYaw = AccessTools.FieldRefAccess<ProdigyCamera, float>("originalYRotation");
+    private bool keyboardMovement, keyboardMoving, cameraKeysRemoved;
+    private float cameraTurnSpeed, cameraYaw;
+    private Vector2 dragStart, testMove;
+    private float testTurn;
+
+    private void InstallControlHooks()
+    {
+        keyboardMovement = Config.Bind("Controls", "KeyboardMovement", true, "WASD moves your character (camera-relative). Mouse wheel zooms, hold the middle mouse button to turn the camera.").Value;
+        cameraTurnSpeed = Config.Bind("Controls", "CameraTurnSpeed", 0.25f, "Degrees the camera turns per pixel of mouse movement while the middle button is held.").Value;
+        if (!keyboardMovement) return;
+        harmony!.Patch(AccessTools.Method(typeof(InputBroker), "ParseClickToMove"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeClickToMove)));
+        harmony.Patch(AccessTools.Method(typeof(InputBroker), "ReadPressedInputs"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterReadInputs)));
+        harmony.Patch(AccessTools.Method(typeof(ProdigyCamera), "UpdateCameraRotation"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeCameraRotation)));
+    }
+
+    private static void AfterReadInputs(InputBroker __instance)
+    {
+        var plugin = Active;
+        if (plugin == null) return;
+        if (!plugin.cameraKeysRemoved && __instance.Inputs != null)
+        {
+            foreach (var action in new[] { __instance.Inputs.CharacterInputs.CameraZoom, __instance.Inputs.CharacterInputs.CameraRotate })
+                for (var i = 0; i < action.bindings.Count; i++)
+                    if (CameraKeys.Contains(action.bindings[i].path)) action.ApplyBindingOverride(i, "");
+            plugin.cameraKeysRemoved = true;
+        }
+        if (__instance.LocalInputBehavior == InputBroker.InputBehavior.ClickToMove) ZoomInputSetter.Invoke(__instance, new object[] { 0f });
+    }
+
+    private static void BeforeClickToMove(InputBroker __instance)
+    {
+        var plugin = Active;
+        var player = Player.PlayerChar;
+        var agent = BrokerAgent(__instance);
+        if (plugin == null || player == null || agent == null || !agent.enabled || !agent.isOnNavMesh) return;
+        var testing = plugin.testMove != Vector2.zero;
+        var input = testing ? plugin.testMove : __instance.Inputs.Persistent.Move.ReadValue<Vector2>();
+        var allowed = input.sqrMagnitude > 0.01f && !InputBlocker.Blocked && __instance.ActiveInputMode == InputBroker.InputMode.Game && (testing || !BrokerMovementLocked(__instance))
+            && !player.PerformingAttack() && !player.PerformingCast() && !player.Fishing();
+        if (!allowed)
+        {
+            if (plugin.keyboardMoving && input.sqrMagnitude <= 0.01f) agent.ResetPath();
+            plugin.keyboardMoving = false;
+            return;
+        }
+        var camera = ProdigyCamera.GameCamera.transform;
+        var forward = Vector3.ProjectOnPlane(camera.forward, Vector3.up).normalized;
+        var right = Vector3.ProjectOnPlane(camera.right, Vector3.up).normalized;
+        var direction = Vector3.ClampMagnitude(forward * input.y + right * input.x, 1f);
+        if (!NavMesh.SamplePosition(player.transform.position + direction * KeyboardStep, out var hit, KeyboardStep, NavMesh.AllAreas)) return;
+        BrokerAttackWhenInRange(__instance) = false;
+        BrokerInteractWhenInRange(__instance) = false;
+        __instance.SetMoveDestination(hit.position);
+        plugin.keyboardMoving = true;
+    }
+
+    private static bool BeforeCameraRotation(ProdigyCamera __instance)
+    {
+        var plugin = Active;
+        var mouse = Mouse.current;
+        if (plugin == null || mouse == null) return true;
+        if (mouse.middleButton.wasPressedThisFrame) plugin.dragStart = mouse.position.ReadValue();
+        if (mouse.middleButton.isPressed && !InputBlocker.Blocked) plugin.cameraYaw += mouse.delta.ReadValue().x * plugin.cameraTurnSpeed;
+        plugin.cameraYaw += plugin.testTurn;
+        if (mouse.middleButton.wasReleasedThisFrame) mouse.WarpCursorPosition(plugin.dragStart);
+        var original = CameraOriginalRotation(__instance).eulerAngles;
+        __instance.transform.localRotation = Quaternion.Euler(original.x, CameraOriginalYaw(__instance) + plugin.cameraYaw, original.z);
+        return false;
+    }
+}

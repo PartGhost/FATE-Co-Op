@@ -8,7 +8,8 @@ internal sealed class SteamLink : IPeerLink
 {
     private const string VersionKey = "fatecoop";
     private const int Channel = 0;
-    private const int SendFlags = Constants.k_nSteamNetworkingSend_Reliable | Constants.k_nSteamNetworkingSend_AutoRestartBrokenSession;
+    private const int ReliableFlags = Constants.k_nSteamNetworkingSend_Reliable | Constants.k_nSteamNetworkingSend_AutoRestartBrokenSession;
+    private const int UnreliableFlags = Constants.k_nSteamNetworkingSend_UnreliableNoNagle | Constants.k_nSteamNetworkingSend_AutoRestartBrokenSession;
     private readonly bool host;
     private readonly Action<string> report;
     private readonly CallResult<LobbyCreated_t> created;
@@ -92,7 +93,7 @@ internal sealed class SteamLink : IPeerLink
         if (peer.IsValid() && remote.GetSteamID() == peer) SteamNetworkingMessages.AcceptSessionWithUser(ref remote);
     }
 
-    public void Send(byte[] message)
+    public void Send(byte[] message, bool reliable)
     {
         if (!peer.IsValid()) return;
         var identity = Identity(peer);
@@ -100,7 +101,7 @@ internal sealed class SteamLink : IPeerLink
         try
         {
             Marshal.Copy(message, 0, data, message.Length);
-            SteamNetworkingMessages.SendMessageToUser(ref identity, data, (uint)message.Length, SendFlags, Channel);
+            SteamNetworkingMessages.SendMessageToUser(ref identity, data, (uint)message.Length, reliable ? ReliableFlags : UnreliableFlags, Channel);
         }
         finally { Marshal.FreeHGlobal(data); }
     }

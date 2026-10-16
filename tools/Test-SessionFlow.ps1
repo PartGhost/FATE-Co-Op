@@ -37,27 +37,39 @@ Write-Output ('Quick rejoin: still ' + $rejoined.b.worldMonsters + ' monsters on
 
 Send 'test-resume' 'b'
 Send 'next-floor' 'b'
-Wait-Pair { param($a, $b) $b.transitioning -or $b.worldKey -ne $a.worldKey } 'Guest leaving by the stairs' 30 | Out-Null
-$stairs = Wait-Pair { param($a, $b) (SameFloor $a $b) -and $b.dungeonDepth -eq $a.dungeonDepth } 'Guest stairs leading back to the host floor'
-Write-Output 'Guest took the stairs alone and landed back on the host''s floor.'
+$stairs = Wait-Pair { param($a, $b) !$b.transitioning -and $b.gameScene -eq 'Dungeon' -and $b.dungeonDepth -eq $a.dungeonDepth + 1 -and $b.worldKey -ne '' -and $b.worldKey -ne $a.worldKey -and $a.followPrompt } 'Guest alone on the next floor, host asked to follow'
+Start-Sleep -Seconds 5
+if ((State b).dungeonDepth -ne $stairs.a.dungeonDepth + 1) { throw 'Guest was pulled back to the host floor.' }
+Write-Output 'Guest took the stairs alone and kept its own floor; the host got a follow prompt.'
+Send 'follow-partner' 'a'
+Wait-Pair { param($a, $b) (SameFloor $a $b) -and $a.dungeonDepth -eq $stairs.b.dungeonDepth -and !$a.followPrompt } 'Host following the guest down' | Out-Null
+Write-Output 'Host said yes and both met on the guest''s depth.'
 
 Send-Until 'town' 'b' { param($a, $b) $b.gameScene -eq 'Town_Grove' } 'Guest walking to town'
-Wait-Pair { param($a, $b) $b.gameScene -eq 'Town_Grove' -and !$b.transitioning } 'Guest arriving in town' | Out-Null
+Wait-Pair { param($a, $b) $b.gameScene -eq 'Town_Grove' -and !$b.transitioning -and $a.followPrompt -and $b.partnerElsewhere } 'Guest in town, host asked to follow' | Out-Null
 Start-Sleep -Seconds 8
 if ((State b).gameScene -ne 'Town_Grove') { throw 'Guest was pulled out of town.' }
 Write-Output 'Guest stayed in town while the host was in the dungeon.'
-Send 'enter-dungeon' 'b'
-Wait-Pair { param($a, $b) SameFloor $a $b } 'Guest entering the dungeon onto the host floor' | Out-Null
-Write-Output 'Guest entered the dungeon and landed on the host''s floor.'
+Send 'follow-partner' 'b'
+Wait-Pair { param($a, $b) (SameFloor $a $b) -and !$a.followPrompt } 'Guest going to the host from town' | Out-Null
+Write-Output 'Go to partner took the guest from town onto the host''s floor, and the host''s open prompt closed itself.'
 
 Send-Until 'town' 'a' { param($a, $b) $a.gameScene -eq 'Town_Grove' } 'Host walking to town'
-$released = Wait-Pair { param($a, $b) $a.gameScene -eq 'Town_Grove' -and $b.gameScene -eq 'Dungeon' -and $b.monstersTracked -eq 0 -and !$b.transitioning } 'Host to town, guest released'
+$released = Wait-Pair { param($a, $b) $a.gameScene -eq 'Town_Grove' -and $b.gameScene -eq 'Dungeon' -and $b.monstersTracked -eq 0 -and !$b.transitioning -and $b.followPrompt } 'Host to town, guest released and asked to follow'
 Start-Sleep -Seconds 5
 if ((State b).gameScene -ne 'Dungeon') { throw 'Guest was pulled to town with the host.' }
 Write-Output 'Host went to town; the guest kept the floor to itself.'
-Send 'enter-dungeon' 'a'
-Wait-Pair { param($a, $b) SameFloor $a $b } 'Guest following the host back down' | Out-Null
-Write-Output 'Host came back down; the guest joined the host''s new floor.'
+Send 'test-swing' 'a'
+Start-Sleep -Seconds 1
+Send 'follow-partner' 'a'
+Start-Sleep -Seconds 4
+$blocked = State a
+if (!$blocked.inCombat -or $blocked.gameScene -ne 'Town_Grove') { throw 'Go to partner worked during a fight.' }
+Write-Output 'Go to partner is refused for 8 seconds after a swing.'
+Wait-Pair { param($a, $b) !$a.inCombat } 'Host leaving combat' 20 | Out-Null
+Send 'follow-partner' 'a'
+Wait-Pair { param($a, $b) (SameFloor $a $b) -and !$b.followPrompt } 'Host going back down to the guest' | Out-Null
+Write-Output 'Host went to the guest''s depth; the guest joined the host''s version of the floor.'
 
 [ordered]@{ passed = $true; shared = $shared; rejoined = $rejoined; stairs = $stairs; released = $released } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $workspace 'artifacts\session-flow-verification.json')
-Write-Output 'PASS: quick rejoin without duplicates, guest stairs, guest free in town, guest keeps the floor when the host leaves.'
+Write-Output 'PASS: quick rejoin, independent floors, follow prompts, go to partner, combat lockout.'

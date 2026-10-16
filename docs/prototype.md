@@ -1,3 +1,44 @@
+# Grove co-op prototype — 0.15.0
+
+## Controls
+
+- **WASD moves the character**, relative to the screen (W is up the screen). Click-to-move still works. Keyboard movement steps a short NavMesh hop ahead each frame through `InputBroker.SetMoveDestination`, and stops when the keys are released, while attacking, casting, fishing, or when a menu blocks input.
+- The game's W/S zoom and A/D camera turn bindings are removed. The mouse wheel zooms, and **holding the middle mouse button turns the camera** (the cursor snaps back when released).
+- `[Controls] KeyboardMovement` (on) and `CameraTurnSpeed` (0.25 degrees per pixel) are in the BepInEx config.
+
+## Partner HUD in the game's style
+
+The partner and their pet now use clones of the game's own `PartyMemberUI` and `PartyPetUI` slots under the party list: portrait, health and mana rings, name with level, and where they are when apart (Grove town, Floor N, Travelling, Down). The clones are display only (no clicks or navigation). The IMGUI partner panel is gone.
+
+## Smoother syncing
+
+- Position frames go over the unreliable channel with a sequence number, so a late frame is dropped instead of holding up newer ones. Everything else stays reliable.
+- The partner and their pet are drawn from a short buffer of timed poses, 0.12 s behind, using a smoothed estimate of the sender's clock. Movement is interpolated between real samples instead of chasing the newest one, so stutters and rubber-banding are gone. A jump of more than 6 units (stairs, teleports) snaps.
+- Every 5 seconds the host resends all monster states and the ground item list; the guest drops copies the host no longer has and asks again for ones it's missing.
+
+## Independent floors (BG3 style)
+
+- Players roam freely. Same place means a shared world: both in Grove, or both on the same dungeon depth (the guest is moved onto the host's version of that floor). Different depths mean each plays their own floor.
+- When your partner leaves the place you were both in, the game's prompt asks "Ghost went to Floor 4. Follow them?". It waits until you're out of combat and not typing, and closes itself if you end up together anyway.
+- **Go to partner** in the Escape menu (shown while apart) takes you to them. It is greyed out during a fight: 8 seconds after you last swung, cast or took damage.
+- A guest joining a session is taken to the host automatically.
+- The guest's own floor now has its own world key, so the host's HUD shows where the guest is.
+
+## Revive
+
+- In a shared world with your partner standing, lethal damage puts you **down** instead of dead: lying on the floor, health 0, monsters lose interest, input blocked, and a 30 second bleed-out bar.
+- Your partner revives you by standing within 3 units for 4 seconds. Both see a progress bar. Walking away, taking damage, attacking or casting resets it. You get up with 25% health.
+- If the timer runs out, your partner is also down, leaves the floor or disconnects, the game's normal death and Fate choice run.
+- **Save & Quit while down counts as death**: it closes the menu and runs the real death (Hardcore loses the character). Closing the game window while down still skips the death, since the game doesn't save on that path.
+
+## Chat
+
+Press Enter to type, Enter to send, Escape to cancel. Game input is off while typing. Messages show bottom-left above the party quest list and fade after 10 seconds.
+
+## Tests
+
+`Test-SessionFlow.ps1` now covers independent floors, follow prompts both ways, Go to partner from town and the combat lockout. `Test-ReviveChat.ps1` covers chat both ways, going down, revive with a swing reset, bleed-out into the Fate choice, and Save & Quit while down. Dev commands: `follow-partner`, `test-down`, `test-save-quit`, `test-near-partner`, `test-chat <text>`, `test-fate-town`, `test-move <x> <y> <seconds>`, `test-turn <degrees>`.
+
 # Grove co-op prototype — 0.14.0
 
 ## Co-op in the game's own menus

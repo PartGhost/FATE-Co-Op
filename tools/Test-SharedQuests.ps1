@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $workspace = Split-Path -Parent $PSScriptRoot
 function State([string]$Instance) {
     $path = if ($Instance -eq 'a') { 'artifacts\runtime\status.json' } else { 'artifacts\runtime-b\status.json' }
@@ -15,7 +15,9 @@ function Wait-Pair([scriptblock]$Condition, [string]$What, [int]$Seconds = 30) {
     throw ($What + ' timed out: A=' + ($a | Select-Object gameScene, questRewardsSent, primaryExperience, status | ConvertTo-Json -Compress) + ' B=' + ($b | Select-Object gameScene, partyQuests, questRewardsTaken, primaryExperience, status | ConvertTo-Json -Compress))
 }
 
-$town = Wait-Pair { param($a, $b) $a.gameScene -eq 'Town_Grove' -and $b.gameScene -eq 'Town_Grove' -and $a.networkConnected -and $b.networkConnected } 'Both players in Grove'
+if ((State a).gameScene -eq 'Dungeon') { Send 'town' }
+if ((State b).gameScene -eq 'Dungeon') { Send 'town' 'b' }
+$town = Wait-Pair { param($a, $b) $a.gameScene -eq 'Town_Grove' -and $b.gameScene -eq 'Town_Grove' -and $a.networkConnected -and $b.networkConnected } 'Both players in Grove' 90
 Send 'test-accept-quest'
 $listed = Wait-Pair { param($a, $b) $b.partyQuests -ne '' } 'Party quest list on the guest'
 Write-Output ('Guest sees the host''s quests: ' + ($listed.b.partyQuests -replace "`n", ' | '))

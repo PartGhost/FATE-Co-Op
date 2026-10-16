@@ -1,0 +1,113 @@
+using System;
+using System.Globalization;
+using HarmonyLib;
+using Tableflip;
+using UnityEngine;
+
+namespace FateCoop.Prototype;
+
+public sealed partial class Plugin
+{
+    private const float CombatCooldown = 8f;
+    private const string TownPlace = "town";
+    private float lastCombatTime = float.NegativeInfinity;
+    private string lastLocalPlace = "", lastPartnerPlace = "", pendingFollowPlace = "";
+    private Action<bool>? followAnswer;
+
+    private bool InCombat => Time.unscaledTime - lastCombatTime < CombatCooldown;
+
+    private string LocalPlace()
+    {
+        if (transitioning || Player.PlayerChar == null) return "";
+        if (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove) return TownPlace;
+        return SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth().ToString(CultureInfo.InvariantCulture) : "";
+    }
+
+    private static string PartnerPlace(PeerFrame? frame)
+    {
+        if (frame == null || frame.worldKey.Length == 0) return "";
+        if (frame.worldKey == "GroveTown") return TownPlace;
+        return frame.scene == Tableflip.Scene.Dungeon.ToString() && frame.depth > 0 ? frame.depth.ToString(CultureInfo.InvariantCulture) : "";
+    }
+
+    private static string DescribePlace(string place) => place == TownPlace ? "Grove town" : "Floor " + place;
+
+    private void TrackPartnerTravel()
+    {
+        if (followAnswer != null && !PromptUI.IsPromptActive) followAnswer = null;
+        var mine = LocalPlace();
+        var theirs = PartnerPlace(remoteFrame);
+        if (mine.Length == 0 || theirs.Length == 0) return;
+        if (!isHost && lastPartnerPlace.Length == 0 && theirs != mine) GoToPartner();
+        if (theirs != lastPartnerPlace && lastPartnerPlace == mine && lastLocalPlace == mine && theirs != mine) pendingFollowPlace = theirs;
+        lastLocalPlace = mine;
+        lastPartnerPlace = theirs;
+        if (theirs == mine)
+        {
+            pendingFollowPlace = "";
+            if (followAnswer != null) AnswerPrompt(SingletonBehaviour<PromptUI>.Instance, false);
+            return;
+        }
+        if (pendingFollowPlace != theirs || InCombat || chatOpen || PromptUI.IsPromptActive || !SingletonBehaviour<PromptUI>.InstanceExists()) return;
+        pendingFollowPlace = "";
+        followAnswer = follow =>
+        {
+            followAnswer = null;
+            if (follow) GoToPartner();
+        };
+        SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw(partnerName + " went to " + DescribePlace(theirs) + ". Follow them?", followAnswer, twoButtons: true, "Yes", "No");
+    }
+
+    private static void AnswerPrompt(PromptUI prompt, bool yes) => AccessTools.Method(typeof(PromptUI), yes ? "OnButtonPositive" : "OnButtonNegative").Invoke(prompt, null);
+
+    private bool PartnerElsewhere()
+    {
+        var mine = LocalPlace();
+        var theirs = PartnerPlace(remoteFrame);
+        return peerConnected && mine.Length > 0 && theirs.Length > 0 && theirs != mine;
+    }
+
+    private void GoToPartner()
+    {
+        if (InCombat) { Notify("You can't travel to your partner during a fight."); return; }
+        if (!PartnerElsewhere()) return;
+        var theirs = PartnerPlace(remoteFrame);
+        if (theirs == TownPlace) TravelToTown();
+        else if (!isHost)
+        {
+            requestedWorld = remoteFrame!.worldKey;
+            Send("world-request", "");
+        }
+        else TravelToFloor(int.Parse(theirs, CultureInfo.InvariantCulture));
+    }
+
+    private void TravelToTown()
+    {
+        if (LevelGenerator.currentInstance == null || transitioning) throw new InvalidOperationException("Dungeon is not ready.");
+        LevelGenerator.currentInstance.UpdateSaveData(false);
+        Town.UpdateSpawnIndex(RealmData.RealmId.Grove, Town.EntryMethod.Stairs);
+        SceneLoad.LoadAsync(Tableflip.Scene.Town_Grove, true);
+    }
+
+    private void TravelToFloor(int depth)
+    {
+        if (transitioning) throw new InvalidOperationException("Wait for the current trip to finish.");
+        Player.latestStairsUsedWasDown = true;
+        if (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && LevelGenerator.currentInstance != null)
+        {
+            LevelGenerator.currentInstance.ReplaceDungeon(0, 0, depth, (int)RealmData.RealmId.Grove, true, false);
+            return;
+        }
+        if (SceneLoad.CurrentScene != Tableflip.Scene.Town_Grove) throw new InvalidOperationException("Travel starts in Grove or the dungeon.");
+        Player.isEnteringDungeonFromTownDoor = true;
+        SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm = RealmData.RealmId.Grove;
+        SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).SetLastVisitedDungeonDepth(depth);
+        SceneLoad.LoadAsync(Tableflip.Scene.Dungeon, true);
+    }
+
+    private void ResetTravel()
+    {
+        lastLocalPlace = lastPartnerPlace = pendingFollowPlace = "";
+        followAnswer = null;
+    }
+}

@@ -53,14 +53,14 @@ public sealed partial class Plugin
         plugin.joiningWorld = world;
         plugin.Logger.LogInfo("HOST_FLOOR_INSTALLED depth=" + world.floor.depth);
     }
-    private bool SharedWorldReady() => !transitioning && Player.PlayerChar != null && Player.PlayerChar.Alive()
+    private bool SharedWorldReady() => !transitioning && Player.PlayerChar != null && (Player.PlayerChar.Alive() || downed)
         && (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove || (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && layoutHash.Length > 0 && CurrentWorldKey().Length > 0));
     private string CurrentWorldKey()
     {
         if (transitioning) return "";
         if (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove) return "GroveTown";
         if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || layoutHash.Length == 0) return "";
-        return isHost ? sessionId + ":" + worldEpoch + ":" + layoutHash : loadedWorldKey;
+        return !isHost && loadedWorldKey.Length > 0 ? loadedWorldKey : sessionId + ":" + worldEpoch + ":" + layoutHash;
     }
     private void FinalizeWorld()
     {

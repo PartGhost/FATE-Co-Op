@@ -31,8 +31,6 @@ public sealed partial class Plugin : BaseUnityPlugin
     private int worldEpoch;
     private int networkAccepted, networkRejected;
     private bool mirroring;
-    private Vector3 mirrorTarget;
-    private float mirrorYaw, lastMirrorTime;
     private string instance = "a";
     private FileStream? runningLock;
 
@@ -81,6 +79,8 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallQuestHooks();
             InstallVisualHooks();
             InstallMenuHooks();
+            InstallControlHooks();
+            InstallReviveHooks();
             commandLineLobby = LobbyFromArguments(Environment.GetCommandLineArgs());
             SetStatus("Ready.");
             Logger.LogInfo("ISOLATION_OK " + actual);
@@ -96,7 +96,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private static bool BeforePartyAI(PartyMember __instance)
     {
-        if (Active == null || Active.actor != __instance || !__instance.Alive()) return true;
+        if (Active == null || Active.actor != __instance) return true;
         Active.suppressedAI++;
         return false;
     }
@@ -136,6 +136,8 @@ public sealed partial class Plugin : BaseUnityPlugin
         if (pendingWorld == null) requestedWorld = "";
         layoutHash = "";
         loadedWorldKey = "";
+        EndDowned();
+        CloseChat();
         ResetMonsters();
         ResetGround();
         if (actor != null) guestWanted = true;
@@ -188,6 +190,8 @@ public sealed partial class Plugin : BaseUnityPlugin
             var keyboard = Keyboard.current;
             UpdateSession();
             UpdateMenus();
+            UpdatePartnerHud();
+            UpdateChat();
             if (keyboard != null && keyboard.f11Key.wasPressedThisFrame) showPanel = !showPanel;
             if (testTools) UpdateDevTools(keyboard);
             if (actor != null && (primary == null || Player.PlayerChar != primary))
@@ -285,17 +289,7 @@ public sealed partial class Plugin : BaseUnityPlugin
     private void LateUpdate()
     {
         UpdateRemoteEntities();
-        if (!mirroring || actor == null) return;
-        var agent = actor.GetComponent<NavMeshAgent>();
-        if (agent == null || !agent.isOnNavMesh) return;
-        var fresh = Time.unscaledTime - lastMirrorTime < 0.5f;
-        var previous = actor.transform.position;
-        var desired = fresh ? mirrorTarget : previous;
-        var next = Vector3.Distance(previous, desired) > 4f ? desired : Vector3.Lerp(previous, desired, 1f - Mathf.Exp(-30f * Time.unscaledDeltaTime));
-        agent.Warp(next);
-        actor.transform.rotation = Quaternion.Slerp(actor.transform.rotation, Quaternion.Euler(0, mirrorYaw, 0), 1f - Mathf.Exp(-20f * Time.unscaledDeltaTime));
-        var animator = actor.GetComponent<Animator>();
-        if (animator != null) animator.SetBool("IsWalking", fresh && Vector3.Distance(previous, next) > 0.001f);
+        if (mirroring && actor != null && partnerTrail.Sample(RenderTime, out var position, out var yaw, out var live)) MoveReplica(actor, position, yaw, live);
     }
 
     private void HostSteam()
@@ -319,6 +313,8 @@ public sealed partial class Plugin : BaseUnityPlugin
             Logger.LogInfo("DESPAWN_OK " + old.GetInstanceID());
         }
         primary = null;
+        partnerTrail.Clear();
+        replicaDown = false;
         remoteSwings = remoteCasts = remoteArrows = remoteLevelUps = remoteSpells = -1;
         replicaFishing = 0;
         replicaPole = null;
@@ -344,17 +340,19 @@ public sealed partial class Plugin : BaseUnityPlugin
                 }
             }
         }
-        if (remotePet != null && Camera.main != null) DrawEntityLabel(remotePet.transform.position, remotePet.CharacterName);
-        DrawPartnerFrame();
+        var bottom = Screen.height - 12f;
         if (!isHost && partyQuests.Length > 0)
         {
             var lines = partyQuests.Split('\n');
             var height = 30 + 22 * lines.Length;
-            GUILayout.BeginArea(new Rect(12, Screen.height - 158 - height, 440, height), GUI.skin.box);
+            bottom -= height;
+            GUILayout.BeginArea(new Rect(12, bottom, 250, height), GUI.skin.box);
             GUILayout.Label("Party quests (the host's):");
             foreach (var line in lines) GUILayout.Label(line);
             GUILayout.EndArea();
         }
+        DrawChat(bottom - 8f);
+        DrawRevive();
     }
 
     private void OnDestroy()

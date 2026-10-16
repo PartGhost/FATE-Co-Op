@@ -21,7 +21,7 @@ public sealed partial class Plugin
     private readonly HashSet<string> announcedFixtures = new HashSet<string>();
     private readonly Dictionary<string, float> fixtureRetry = new Dictionary<string, float>();
     private int nextGroundId = 1, lootGiven, lootTaken, dropsSent;
-    private float nextGroundSync;
+    private float nextGroundSync, nextGroundCheck;
     private bool dropLocally, buildingActor;
 
     [Serializable] private sealed class GroundItem
@@ -188,6 +188,12 @@ public sealed partial class Plugin
             ForgetGround(id);
         }
         if (!inWorld) return;
+        if (Time.unscaledTime >= nextGroundCheck)
+        {
+            nextGroundCheck = Time.unscaledTime + FullRefreshInterval;
+            announcedFixtures.Clear();
+            Send("ground-list", string.Join(",", announcedGround));
+        }
         foreach (var chest in UnityEngine.Object.FindObjectsOfType<ContainerInteractable>().Where(c => c.IsOpen))
             AnnounceFixture(FixtureKey("c", chest.transform.position));
         foreach (var barrel in UnityEngine.Object.FindObjectsOfType<ContainerDestroyable>().Where(b => b.IsDestroyed))
@@ -235,6 +241,26 @@ public sealed partial class Plugin
         var id = ParseInt(body);
         if (ground.TryGetValue(id, out var obj)) RemoveGroundObject(obj);
         ForgetGround(id);
+    }
+
+    private void CheckGroundList(string body)
+    {
+        if (isHost) throw new InvalidOperationException("Only the host sends ground lists.");
+        if (!SharedWorldReady()) return;
+        var listed = new HashSet<int>(body.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(ParseInt));
+        foreach (var stale in ground.Keys.Where(id => !listed.Contains(id)).ToList())
+        {
+            RemoveGroundObject(ground[stale]);
+            ForgetGround(stale);
+        }
+        var missing = listed.Where(id => !ground.ContainsKey(id)).ToList();
+        if (missing.Count > 0) Send("ground-missing", string.Join(",", missing));
+    }
+
+    private void ResendGround(string body)
+    {
+        if (!isHost) throw new InvalidOperationException("Only the host resends ground items.");
+        foreach (var id in body.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(ParseInt)) announcedGround.Remove(id);
     }
 
     private void GiveTake(string body)
