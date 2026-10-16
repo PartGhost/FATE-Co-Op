@@ -4,12 +4,12 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 
 // Only the disposable workspace copy is modified. No game assembly is loaded/executed.
-if (args.Length < 2 || args.Length > 3) throw new ArgumentException("Usage: SandboxPatcher <workspace> <save-directory> [a|b]");
+if (args.Length < 2 || args.Length > 3) throw new ArgumentException("Usage: SandboxPatcher <workspace> <save-directory> [a|b|c]");
 var workspace = Path.GetFullPath(args[0]);
 var instance = args.Length == 3 ? args[2] : "a";
-if (instance != "a" && instance != "b") throw new ArgumentException("Instance must be a or b.");
-var game = Path.Combine(workspace, instance == "a" ? "test-game" : "test-game-b");
-var prefsPrefix = instance == "a" ? "FateCoopSandboxA:" : "FateCoopSandboxB:";
+if (instance != "a" && instance != "b" && instance != "c") throw new ArgumentException("Instance must be a, b or c.");
+var game = Path.Combine(workspace, instance == "a" ? "test-game" : "test-game-" + instance);
+var prefsPrefix = "FateCoopSandbox" + instance.ToUpperInvariant() + ":";
 var managed = Path.Combine(game, "FateReawakened_Data", "Managed");
 var saves = Path.GetFullPath(args[1]);
 if (!saves.StartsWith(workspace + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))

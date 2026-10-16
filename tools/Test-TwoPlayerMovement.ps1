@@ -6,7 +6,7 @@ function State([string]$Instance) {
     Get-Content -LiteralPath (Join-Path $workspace ($root + '\status.json')) -Raw | ConvertFrom-Json
 }
 $beforeA = State 'a'; $beforeB = State 'b'
-if (!$beforeA.networkConnected -or !$beforeB.networkConnected) { throw 'Connect the games with Connect-TwoGames.ps1 before running the movement test.' }
+if (!$beforeA.networkConnected -or !$beforeB.networkConnected) { throw 'Connect the games with Connect-Games.ps1 before running the movement test.' }
 foreach ($instance in @('a','b')) {
     & (Join-Path $PSScriptRoot 'Send-PrototypeCommand.ps1') 'test-resume' -Instance $instance
     $direction = if ($instance -eq 'a') { 'test-walk -1 0' } else { 'test-walk 1 0' }

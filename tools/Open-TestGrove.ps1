@@ -1,7 +1,8 @@
-param([ValidateSet('a','b')][string]$Instance = 'a')
+param([ValidateSet('a','b','c')][string]$Instance = 'a')
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path -Parent $PSScriptRoot
-$runtime = Join-Path $workspace $(if ($Instance -eq 'a') { 'artifacts\runtime' } else { 'artifacts\runtime-b' })
+. (Join-Path $PSScriptRoot 'Instances.ps1')
+$runtime = Get-RuntimePath $Instance
 function Wait-State([scriptblock]$Condition) {
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     do {

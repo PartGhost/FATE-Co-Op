@@ -15,14 +15,15 @@ function Wait-Pair([scriptblock]$Condition, [string]$What, [int]$Seconds = 20) {
     throw ($What + ' timed out: A=' + ($a | Select-Object localWeaponParticles, replicaWeaponParticles, remoteEffects, mirrorEffects, damagePopups, spellsReplayed, arrowsDrawn, levelUpsPlayed, localFishing, replicaFishing, networkRejected, status | ConvertTo-Json -Compress) + ' B=' + ($b | Select-Object localWeaponParticles, replicaWeaponParticles, remoteEffects, mirrorEffects, damagePopups, spellsReplayed, arrowsDrawn, levelUpsPlayed, localFishing, replicaFishing, networkRejected, status | ConvertTo-Json -Compress))
 }
 
-if ((State a).gameScene -eq 'Town_Grove') { Send 'enter-dungeon' }
-if ((State b).gameScene -eq 'Town_Grove') { Send 'enter-dungeon' 'b' }
+& (Join-Path $PSScriptRoot 'Enter-HostDungeon.ps1') | Out-Null
 $start = Wait-Pair { param($a, $b) $a.gameScene -eq 'Dungeon' -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $a.guestId -ne 0 -and $b.guestId -ne 0 -and $b.monstersTracked -gt 0 } 'Shared floor' 90
-Send 'test-resume' 'a'
-Send 'next-floor'
-Wait-Pair { param($a, $b) $b.followPrompt } 'Follow prompt on the guest' 60 | Out-Null
-Send 'follow-partner' 'b'
-$start = Wait-Pair { param($a, $b) $a.dungeonDepth -gt $start.a.dungeonDepth -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $a.guestId -ne 0 -and $b.guestId -ne 0 -and $b.monstersTracked -gt 0 } 'Fresh shared floor' 120
+do {
+    Send 'test-resume' 'a'
+    Send 'next-floor'
+    Wait-Pair { param($a, $b) $b.followPrompt } 'Follow prompt on the guest' 60 | Out-Null
+    Send 'follow-partner' 'b'
+    $start = Wait-Pair { param($a, $b) $a.dungeonDepth -gt $start.a.dungeonDepth -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $a.guestId -ne 0 -and $b.guestId -ne 0 -and $b.monstersTracked -gt 0 } 'Fresh shared floor' 120
+} while ($start.a.monstersTracked - $start.a.trackedDead -lt 5)
 Send 'test-resume' 'a'
 Send 'test-resume' 'b'
 

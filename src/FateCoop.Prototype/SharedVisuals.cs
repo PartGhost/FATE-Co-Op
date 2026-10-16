@@ -23,11 +23,9 @@ public sealed partial class Plugin
     private static readonly AccessTools.FieldRef<Character, Character> MasterRef = AccessTools.FieldRefAccess<Character, Character>("masterCharacter");
     private static readonly AccessTools.FieldRef<SpellProjectile, SpellProjectileData> ProjectileDataRef = AccessTools.FieldRefAccess<SpellProjectile, SpellProjectileData>("data");
     private readonly Dictionary<Character, HashSet<string>> shownEffects = new Dictionary<Character, HashSet<string>>();
-    private int damagePopups, spellsReplayed, arrowsDrawn, levelUpsPlayed, localArrows, remoteArrows = -1, localLevelUps, remoteLevelUps = -1, lastLevel, localSpells, remoteSpells = -1, localSpellTarget, replicaFishing, visualDepth;
+    private int damagePopups, spellsReplayed, arrowsDrawn, levelUpsPlayed, localArrows, localLevelUps, lastLevel, localSpells, localSpellTarget, visualDepth;
     private Vector3 localArrowEnd, localSpellAim;
     private string localSpellName = "";
-    private FishingPole? replicaPole;
-    private LineRenderer? replicaArrow;
 
     private void InstallVisualHooks()
     {
@@ -42,7 +40,7 @@ public sealed partial class Plugin
 
     private bool VisualOnly => visualDepth > 0;
 
-    private bool IsVisualCaster(Character? caster) => caster != null && (caster == actor || caster == remotePet || (!isHost && caster is Monster mirror && monsterIds.ContainsKey(mirror)));
+    private bool IsVisualCaster(Character? caster) => caster != null && (IsStandIn(caster) || (!OwnsWorld && caster is Monster mirror && monsterIds.ContainsKey(mirror)));
 
     private static bool BeforeVisualOnlyGameplay() => Active == null || !Active.VisualOnly;
 
@@ -62,7 +60,7 @@ public sealed partial class Plugin
         plugin.localSpells++;
         plugin.localSpellName = spell.spellName;
         plugin.localSpellAim = targetPosition ?? (targetChar != null ? targetChar.transform.position : __instance.transform.position + __instance.transform.forward * 150f);
-        plugin.localSpellTarget = targetChar is Monster monster && plugin.monsterIds.TryGetValue(monster, out var id) ? id : targetChar != null && targetChar == plugin.actor ? -1 : 0;
+        plugin.localSpellTarget = targetChar is Monster monster && plugin.monsterIds.TryGetValue(monster, out var id) ? id : plugin.PartnerOf(targetChar) is Partner target ? PlayerTarget(target.Id) : 0;
     }
 
     private static void BeforeProjectileImpact(SpellProjectile __instance, out bool __state)
@@ -81,13 +79,13 @@ public sealed partial class Plugin
     private static void AfterDamage(CharacterVitals __instance, CharacterVitals.Damage data)
     {
         var plugin = Active;
-        if (plugin == null || !plugin.isHost || data.value <= 0 || !(__instance.Char is Monster monster) || !plugin.monsterIds.TryGetValue(monster, out var id) || !plugin.PeerInWorld()) return;
-        plugin.Send("pop", string.Join("|", id, data.value, data.damageResisted, data.isCritical ? 1 : 0, data.isFullResist ? 1 : 0, data.isPartialResist ? 1 : 0));
+        if (plugin == null || !plugin.OwnsWorld || data.value <= 0 || !(__instance.Char is Monster monster) || !plugin.monsterIds.TryGetValue(monster, out var id) || !plugin.WorldPartners().Any()) return;
+        plugin.SendWorld("pop", string.Join("|", id, data.value, data.damageResisted, data.isCritical ? 1 : 0, data.isFullResist ? 1 : 0, data.isPartialResist ? 1 : 0));
     }
 
     private void ShowDamagePopup(string body)
     {
-        if (isHost) throw new InvalidOperationException("Only the host sends damage numbers.");
+        if (OwnsWorld) return;
         var parts = body.Split('|');
         if (parts.Length != 6) throw new InvalidOperationException("Invalid damage number.");
         if (!monsters.TryGetValue(ParseInt(parts[0]), out var monster) || monster == null) return;
@@ -127,11 +125,6 @@ public sealed partial class Plugin
 
     private static AppliedEffect ParticleOnly(string name) => new AppliedEffect(new EffectData { name = name }, 0, null, -1);
 
-    private void ForgetShownEffects()
-    {
-        foreach (var key in shownEffects.Keys.Where(key => key == null || key == actor).ToList()) shownEffects.Remove(key);
-    }
-
     private int CountLevelUps()
     {
         var player = Player.PlayerChar;
@@ -150,27 +143,29 @@ public sealed partial class Plugin
         return (animator.GetBool("IsFishing") ? 1 : 0) | (animator.GetBool("IsFishBiting") ? 2 : 0) | (animator.GetBool("IsPullingFish") ? 4 : 0) | (pole != null && pole.fishGO != null && pole.fishGO.activeSelf ? 8 : 0);
     }
 
-    private void PlayReplicaVisuals(PeerFrame frame)
+    private void PlayReplicaVisuals(Partner partner, PeerFrame frame)
     {
-        ShowEffects(actor!, frame.effects);
-        if (remoteArrows >= 0 && frame.arrows != remoteArrows && FinitePosition(frame.arrowEnd)) DrawReplicaArrow(frame.arrowEnd);
-        if (remoteLevelUps >= 0 && frame.levelUps != remoteLevelUps) PlayReplicaLevelUp();
-        if (remoteSpells >= 0 && frame.spells != remoteSpells && FinitePosition(frame.spellAim)) ReplaySpell(frame.spellName, frame.spellAim, frame.spellTarget);
-        remoteArrows = frame.arrows;
-        remoteLevelUps = frame.levelUps;
-        remoteSpells = frame.spells;
-        ShowReplicaFishing(frame.fishing);
+        var actor = partner.Actor!;
+        ShowEffects(actor, frame.effects);
+        if (partner.Arrows >= 0 && frame.arrows != partner.Arrows && FinitePosition(frame.arrowEnd)) DrawReplicaArrow(partner, frame.arrowEnd);
+        if (partner.LevelUps >= 0 && frame.levelUps != partner.LevelUps) PlayReplicaLevelUp(actor);
+        if (partner.Spells >= 0 && frame.spells != partner.Spells && FinitePosition(frame.spellAim)) ReplaySpell(actor, frame.spellName, frame.spellAim, frame.spellTarget);
+        partner.Arrows = frame.arrows;
+        partner.LevelUps = frame.levelUps;
+        partner.Spells = frame.spells;
+        ShowReplicaFishing(partner, frame.fishing);
     }
 
-    private void DrawReplicaArrow(Vector3 end)
+    private void DrawReplicaArrow(Partner partner, Vector3 end)
     {
-        var handle = actor!.leftWeaponHandle != null && actor.leftWeaponHandle.CurrentEquipment != null ? actor.leftWeaponHandle : actor.rightWeaponHandle;
+        var actor = partner.Actor!;
+        var handle = actor.leftWeaponHandle != null && actor.leftWeaponHandle.CurrentEquipment != null ? actor.leftWeaponHandle : actor.rightWeaponHandle;
         if (handle == null || handle.CurrentEquipment == null) return;
         var line = handle.CurrentEquipment.GetComponent<LineRenderer>();
         if (line == null)
         {
-            if (replicaArrow == null) replicaArrow = Object.Instantiate(SingletonBehaviour<FateDB>.Instance.rangedAttackLineRendererFallbackPrefab, actor.transform);
-            line = replicaArrow;
+            if (partner.ArrowLine == null) partner.ArrowLine = Object.Instantiate(SingletonBehaviour<FateDB>.Instance.rangedAttackLineRendererFallbackPrefab, actor.transform);
+            line = partner.ArrowLine;
         }
         line.enabled = true;
         line.positionCount = 2;
@@ -180,11 +175,11 @@ public sealed partial class Plugin
         arrowsDrawn++;
     }
 
-    private void PlayReplicaLevelUp()
+    private void PlayReplicaLevelUp(Character actor)
     {
         var source = Player.PlayerChar != null ? Player.PlayerChar.levelupParticle : null;
         if (source == null) return;
-        var effect = Object.Instantiate(source.gameObject, actor!.transform);
+        var effect = Object.Instantiate(source.gameObject, actor.transform);
         effect.transform.localPosition = source.transform.localPosition;
         var particles = effect.GetComponent<ParticleSystem>();
         particles.Play();
@@ -192,18 +187,19 @@ public sealed partial class Plugin
         levelUpsPlayed++;
     }
 
-    private void PlayReplicaCastGlow(SpellData spell)
+    private static void PlayReplicaCastGlow(Character actor, SpellData spell)
     {
         var glow = spell.sphereType == SpellSphere.Attack ? "P_ATTACKCASTING" : spell.sphereType == SpellSphere.Defense ? "P_DEFENSECASTING" : spell.sphereType == SpellSphere.Charm ? "P_CHARMCASTING" : "";
         if (glow.Length > 0) CastingVfxMethod.Invoke(actor, new object[] { glow });
     }
 
-    private void ReplaySpell(string spellName, Vector3 aim, int target)
+    private void ReplaySpell(Character caster, string spellName, Vector3 aim, int target)
     {
         var spell = SingletonBehaviour<FateDB>.Instance.allSpells.FirstOrDefault(s => s != null && s.spellName == spellName);
         if (spell == null) throw new InvalidOperationException("Unknown spell: " + spellName);
-        Character? targetChar = target > 0 && monsters.TryGetValue(target, out var monster) ? monster : target == -1 ? Player.PlayerChar : null;
-        var caster = actor!;
+        Character? targetChar = target > 0 && monsters.TryGetValue(target, out var monster) ? monster
+            : target < 0 && -target - 1 == myId ? Player.PlayerChar
+            : target < 0 && partners.TryGetValue(-target - 1, out var aimed) ? aimed.Actor : null;
         var master = MasterRef(caster);
         caster.mana = caster.MaxMana();
         caster.stamina = caster.MaxStamina();
@@ -218,20 +214,21 @@ public sealed partial class Plugin
         }
     }
 
-    private void ShowReplicaFishing(int flags)
+    private void ShowReplicaFishing(Partner partner, int flags)
     {
-        if (flags == replicaFishing) return;
+        if (flags == partner.Fishing) return;
+        var actor = partner.Actor!;
         var fishing = (flags & 1) != 0;
         var biting = (flags & 2) != 0;
         var pulling = (flags & 4) != 0;
-        var started = fishing && (replicaFishing & 1) == 0;
-        var animator = actor!.GetComponent<Animator>();
+        var started = fishing && (partner.Fishing & 1) == 0;
+        var animator = actor.GetComponent<Animator>();
         animator.SetBool("IsFishing", fishing);
         animator.SetBool("IsFishBiting", biting);
         animator.SetBool("IsPullingFish", pulling);
         if (actor.rightWeaponHandle != null) actor.rightWeaponHandle.SetEquipmentActive(!fishing);
         if (actor.leftWeaponHandle != null) actor.leftWeaponHandle.SetEquipmentActive(!fishing);
-        var pole = ReplicaPole();
+        var pole = ReplicaPole(partner);
         if (pole != null)
         {
             pole.SetFishingPoleActive(fishing);
@@ -241,25 +238,25 @@ public sealed partial class Plugin
         var audio = SingletonBehaviour<AudioManager>.Instance;
         var position = actor.transform.position;
         if (started) audio.PlayAudioClipOnLocation(AudioData.AudioClipName.FishPoleThrow, position);
-        if (biting && (replicaFishing & 2) == 0) audio.PlayAudioClipOnLocation(AudioData.AudioClipName.FishBite, position);
-        if (pulling && (replicaFishing & 4) == 0) audio.PlayAudioClipOnLocation(AudioData.AudioClipName.FishPolePull, position);
-        if ((flags & 8) != 0 && (replicaFishing & 8) == 0) audio.PlayAudioClipOnLocation(AudioData.AudioClipName.CaughtFish, position);
-        replicaFishing = flags;
+        if (biting && (partner.Fishing & 2) == 0) audio.PlayAudioClipOnLocation(AudioData.AudioClipName.FishBite, position);
+        if (pulling && (partner.Fishing & 4) == 0) audio.PlayAudioClipOnLocation(AudioData.AudioClipName.FishPolePull, position);
+        if ((flags & 8) != 0 && (partner.Fishing & 8) == 0) audio.PlayAudioClipOnLocation(AudioData.AudioClipName.CaughtFish, position);
+        partner.Fishing = flags;
     }
 
-    private FishingPole? ReplicaPole()
+    private FishingPole? ReplicaPole(Partner partner)
     {
-        if (replicaPole != null) return replicaPole;
+        if (partner.Pole != null) return partner.Pole;
         var source = Player.PlayerChar != null ? (FishingPole)FishingPoleField.GetValue(Player.PlayerChar) : null;
         if (source == null) return null;
-        var bone = FindChild(actor!.transform, source.transform.parent.name);
+        var bone = FindChild(partner.Actor!.transform, source.transform.parent.name);
         if (bone == null) return null;
         var copy = Object.Instantiate(source.gameObject, bone);
         copy.transform.localPosition = source.transform.localPosition;
         copy.transform.localRotation = source.transform.localRotation;
         copy.transform.localScale = source.transform.localScale;
-        replicaPole = copy.GetComponent<FishingPole>();
-        return replicaPole;
+        partner.Pole = copy.GetComponent<FishingPole>();
+        return partner.Pole;
     }
 
     private static int WeaponParticles(Character? character) => character == null ? 0

@@ -1,9 +1,10 @@
-param([ValidateSet('a','b')][string]$Instance = 'a')
+param([ValidateSet('a','b','c')][string]$Instance = 'a')
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path -Parent $PSScriptRoot
-$game = Join-Path $workspace $(if ($Instance -eq 'a') { 'test-game' } else { 'test-game-b' })
+. (Join-Path $PSScriptRoot 'Instances.ps1')
+$game = Get-TestGamePath $Instance
 $manifest = Get-Content -LiteralPath (Join-Path $game 'fate-coop-sandbox.json') -Raw | ConvertFrom-Json
-$expectedSave = Join-Path $workspace ('test-saves\instance-' + $Instance)
+$expectedSave = Get-SavePath $Instance
 if ($manifest.saveDirectory -ne $expectedSave) { throw 'Sandbox manifest is invalid.' }
 foreach ($assembly in $manifest.assemblies) {
     $actual = Get-FileHash -LiteralPath (Join-Path $game ('FateReawakened_Data\Managed\' + $assembly.assembly))
@@ -12,7 +13,7 @@ foreach ($assembly in $manifest.assemblies) {
 if (!(Test-Path -LiteralPath (Join-Path $game 'BepInEx\plugins\FateCoop.Prototype.dll'))) { throw 'Build the prototype first.' }
 $existing = Get-Process -Name FateReawakened -ErrorAction SilentlyContinue
 if ($existing | Where-Object { $_.Path -eq (Join-Path $game 'FateReawakened.exe') -or !$_.Path -or !$_.Path.StartsWith($workspace + '\', [StringComparison]::OrdinalIgnoreCase) }) { throw 'This instance or a non-sandbox FATE process is already running.' }
-$runtime = Join-Path $workspace $(if ($Instance -eq 'a') { 'artifacts\runtime' } else { 'artifacts\runtime-b' })
+$runtime = Get-RuntimePath $Instance
 $archive = Join-Path $runtime ('runs\' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmssfffffff'))
 New-Item -ItemType Directory -Force -Path $archive | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $archive 'commands') | Out-Null
@@ -22,7 +23,7 @@ if (Test-Path -LiteralPath $oldQueue) {
         Move-Item -LiteralPath $command.FullName -Destination (Join-Path $archive ('commands\' + $command.Name))
     }
 }
-foreach ($name in @('status.json','telemetry.jsonl','route-result.json','primary-walk-result.json','verification.json','lifecycle-result.json','Player.log')) {
+foreach ($name in @('status.json','telemetry.jsonl','Player.log')) {
     $previous = Join-Path $runtime $name
     if (Test-Path -LiteralPath $previous) { Move-Item -LiteralPath $previous -Destination (Join-Path $archive $name) }
 }

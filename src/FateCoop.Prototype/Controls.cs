@@ -20,6 +20,7 @@ public sealed partial class Plugin
     private static readonly System.Reflection.MethodInfo ZoomInputSetter = AccessTools.PropertySetter(typeof(InputBroker), "CameraZoomInputValue");
     private static readonly AccessTools.FieldRef<ProdigyCamera, Quaternion> CameraOriginalRotation = AccessTools.FieldRefAccess<ProdigyCamera, Quaternion>("originalRotation");
     private static readonly AccessTools.FieldRef<ProdigyCamera, float> CameraOriginalYaw = AccessTools.FieldRefAccess<ProdigyCamera, float>("originalYRotation");
+    private static readonly AccessTools.FieldRef<MiniMapIconUI, Quaternion> SavedIconRotation = AccessTools.FieldRefAccess<MiniMapIconUI, Quaternion>("savedRotation");
     private bool keyboardMovement, keyboardMoving, cameraKeysRemoved;
     private float cameraTurnSpeed, cameraYaw;
     private Vector2 dragStart, testMove;
@@ -33,6 +34,15 @@ public sealed partial class Plugin
         harmony!.Patch(AccessTools.Method(typeof(InputBroker), "ParseClickToMove"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeClickToMove)));
         harmony.Patch(AccessTools.Method(typeof(InputBroker), "ReadPressedInputs"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterReadInputs)));
         harmony.Patch(AccessTools.Method(typeof(ProdigyCamera), "UpdateCameraRotation"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeCameraRotation)));
+        harmony.Patch(AccessTools.Method(typeof(MiniMapIconUI), "LateUpdate"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterMinimapIcon)));
+    }
+
+    private static void AfterMinimapIcon(MiniMapIconUI __instance)
+    {
+        if (Active == null || !__instance.fixedRotation) return;
+        var saved = SavedIconRotation(__instance);
+        __instance.transform.rotation = __instance.isCamera ? Quaternion.AngleAxis(Active.cameraYaw, Vector3.up) * saved
+            : Quaternion.Euler(saved.eulerAngles.x, ProdigyCamera.GameCamera.transform.eulerAngles.y, saved.eulerAngles.z);
     }
 
     private static void AfterReadInputs(InputBroker __instance)

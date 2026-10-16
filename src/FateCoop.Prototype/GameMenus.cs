@@ -17,10 +17,12 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const float MessageSeconds = 5f, PauseButtonHeight = 66f;
+    private const int MinPlayers = 2, MaxPlayers = 16;
     private readonly Queue<string> pendingPrompts = new Queue<string>();
-    private readonly List<Button> mainMenuButtons = new List<Button>(), coopMenuButtons = new List<Button>();
+    private readonly List<Button> mainMenuButtons = new List<Button>(), coopMenuButtons = new List<Button>(), goToButtons = new List<Button>();
     private MainMenuUI? mainMenu;
-    private Button? hostPauseButton, invitePauseButton, partnerPauseButton, leavePauseButton;
+    private Button? hostPauseButton, invitePauseButton, leavePauseButton, playersButton;
+    private Vector2 pauseContentSize;
     private bool coopMenuOpen, autoContinued;
 
     private void InstallMenuHooks()
@@ -60,6 +62,9 @@ public sealed partial class Plugin
         coop.transform.SetSiblingIndex(menu.continueButton.transform.GetSiblingIndex() + 1);
         mainMenuButtons.Add(coop);
         coopMenuButtons.Add(CloneButton(menu.optionsButton, "Host co-op", HostFromMenu));
+        playersButton = CloneButton(menu.optionsButton, "", () => ChangePlayers(PointerOnRight(playersButton!) ? 1 : -1));
+        coopMenuButtons.Add(playersButton);
+        ShowPlayers();
         coopMenuButtons.Add(CloneButton(menu.optionsButton, "Join a friend", JoinFromMenu));
         coopMenuButtons.Add(CloneButton(menu.optionsButton, "Back", () => ShowCoopMenu(false)));
         foreach (var button in coopMenuButtons) button.gameObject.SetActive(false);
@@ -73,6 +78,22 @@ public sealed partial class Plugin
         foreach (var button in coopMenuButtons) button.gameObject.SetActive(open);
         var selected = open ? coopMenuButtons[0] : mainMenu.continueButton.interactable ? mainMenu.continueButton : mainMenu.newgameButton;
         EventSystem.current.SetSelectedGameObject(selected.gameObject);
+    }
+
+    private void ChangePlayers(int change)
+    {
+        playerCount!.Value = Mathf.Clamp(playerCount.Value + change, MinPlayers, MaxPlayers);
+        ShowPlayers();
+    }
+
+    private void ShowPlayers() => playersButton!.GetComponentInChildren<TMP_Text>(true).text = "<   " + playerCount!.Value + " players   >";
+
+    private static bool PointerOnRight(Button button)
+    {
+        var mouse = Mouse.current;
+        if (mouse == null) return true;
+        RectTransformUtility.ScreenPointToLocalPointInRectangle((RectTransform)button.transform, mouse.position.ReadValue(), null, out var local);
+        return local.x >= 0f;
     }
 
     private static bool CanContinue()
@@ -98,9 +119,9 @@ public sealed partial class Plugin
 
     private void ContinueForPartner()
     {
-        if (isHost || autoContinued || !peerConnected || !SceneLoad.IsInMainMenuScene || Fate.CurrentFateVer != Fate.FateVer.Original) return;
+        if (isHost || autoContinued || !partners.TryGetValue(HostId, out var host) || host.Name.Length == 0 || !SceneLoad.IsInMainMenuScene || Fate.CurrentFateVer != Fate.FateVer.Original) return;
         autoContinued = true;
-        if (!CanContinue()) { Notify("Make or pick a character to join " + partnerName + "."); return; }
+        if (!CanContinue()) { Notify("Make or pick a character to join " + host.Name + "."); return; }
         MainMenuUI.ContinueRequested();
     }
 
@@ -114,22 +135,34 @@ public sealed partial class Plugin
         var saveQuit = (Button)AccessTools.Field(typeof(PauseUI), "saveQuitButton").GetValue(pause);
         var options = (Button)AccessTools.Field(typeof(PauseUI), "optionsButton").GetValue(pause);
         var resume = (Button)AccessTools.Field(typeof(PauseUI), "resumeButton").GetValue(pause);
+        var content = (RectTransform)options.transform.parent.parent;
         if (hostPauseButton == null)
         {
+            pauseContentSize = content.sizeDelta;
             hostPauseButton = CloneButton(options, "Host co-op", () => { resume.onClick.Invoke(); TryHostSteam(); });
             invitePauseButton = CloneButton(options, "Invite friend", () => { resume.onClick.Invoke(); (link as SteamLink)?.Invite(); });
-            partnerPauseButton = CloneButton(options, "Go to partner", () => { resume.onClick.Invoke(); GoToPartner(); });
             leavePauseButton = CloneButton(options, "Leave co-op", () => { resume.onClick.Invoke(); EndSession("You left co-op."); });
-            var index = options.transform.GetSiblingIndex() + 1;
-            foreach (var button in new[] { hostPauseButton, invitePauseButton, partnerPauseButton, leavePauseButton }) button.transform.SetSiblingIndex(index++);
-            var content = (RectTransform)options.transform.parent.parent;
-            content.sizeDelta += new Vector2(0f, 3 * PauseButtonHeight);
+        }
+        var elsewhere = PartnersElsewhere().ToList();
+        while (goToButtons.Count < elsewhere.Count) goToButtons.Add(CloneButton(options, "", () => { }));
+        for (var i = 0; i < goToButtons.Count; i++)
+        {
+            var button = goToButtons[i];
+            button.gameObject.SetActive(i < elsewhere.Count);
+            if (i >= elsewhere.Count) continue;
+            var partner = elsewhere[i];
+            button.GetComponentInChildren<TMP_Text>(true).text = "Go to " + partner.Name + " (" + DescribePlace(PartnerPlace(partner.Frame)) + ")";
+            button.onClick.RemoveAllListeners();
+            button.onClick.AddListener(() => { resume.onClick.Invoke(); GoToPartner(partner); });
         }
         hostPauseButton.gameObject.SetActive(link == null && SteamReady);
         invitePauseButton!.gameObject.SetActive(link is SteamLink { CanInvite: true });
-        partnerPauseButton!.gameObject.SetActive(PartnerElsewhere());
         leavePauseButton!.gameObject.SetActive(link != null);
-        var order = new[] { saveQuit, options, hostPauseButton, invitePauseButton, partnerPauseButton, leavePauseButton, resume }.Where(button => button.gameObject.activeSelf).ToArray();
+        var extras = new[] { hostPauseButton, invitePauseButton }.Concat(goToButtons).Append(leavePauseButton).ToArray();
+        var index = options.transform.GetSiblingIndex() + 1;
+        foreach (var button in extras) button.transform.SetSiblingIndex(index++);
+        var order = new[] { saveQuit, options }.Concat(extras).Append(resume).Where(button => button.gameObject.activeSelf).ToArray();
+        content.sizeDelta = pauseContentSize + new Vector2(0f, (order.Length - 3) * PauseButtonHeight);
         for (var i = 0; i < order.Length; i++)
         {
             var navigation = order[i].navigation;
@@ -162,7 +195,13 @@ public sealed partial class Plugin
         if (coopMenuOpen && ((keyboard != null && keyboard.escapeKey.wasPressedThisFrame) || (gamepad != null && gamepad.buttonEast.wasPressedThisFrame))) ShowCoopMenu(false);
         if (pendingPrompts.Count > 0 && SingletonBehaviour<PromptUI>.InstanceExists() && !PromptUI.IsPromptActive)
             SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw(pendingPrompts.Dequeue(), null, twoButtons: false, "OK");
-        if (partnerPauseButton != null) partnerPauseButton.interactable = !InCombat;
+        foreach (var button in goToButtons) button.interactable = !InCombat;
+        if (coopMenuOpen && playersButton != null && EventSystem.current.currentSelectedGameObject == playersButton.gameObject)
+        {
+            var left = (keyboard != null && (keyboard.leftArrowKey.wasPressedThisFrame || keyboard.aKey.wasPressedThisFrame)) || (gamepad != null && gamepad.dpad.left.wasPressedThisFrame);
+            var right = (keyboard != null && (keyboard.rightArrowKey.wasPressedThisFrame || keyboard.dKey.wasPressedThisFrame)) || (gamepad != null && gamepad.dpad.right.wasPressedThisFrame);
+            if (left != right) ChangePlayers(right ? 1 : -1);
+        }
         ContinueForPartner();
     }
 }

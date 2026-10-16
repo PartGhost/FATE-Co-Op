@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
@@ -10,8 +12,11 @@ public sealed partial class Plugin
 {
     private const float CombatCooldown = 8f;
     private const string TownPlace = "town";
+    private readonly Dictionary<int, string> lastPlaces = new Dictionary<int, string>();
     private float lastCombatTime = float.NegativeInfinity;
-    private string lastLocalPlace = "", lastPartnerPlace = "", pendingFollowPlace = "";
+    private string lastLocalPlace = "";
+    private int pendingFollow = Unassigned;
+    private bool metHost;
     private Action<bool>? followAnswer;
 
     private bool InCombat => Time.unscaledTime - lastCombatTime < CombatCooldown;
@@ -26,59 +31,70 @@ public sealed partial class Plugin
     private static string PartnerPlace(PeerFrame? frame)
     {
         if (frame == null || frame.worldKey.Length == 0) return "";
-        if (frame.worldKey == "GroveTown") return TownPlace;
+        if (frame.worldKey == TownKey) return TownPlace;
         return frame.scene == Tableflip.Scene.Dungeon.ToString() && frame.depth > 0 ? frame.depth.ToString(CultureInfo.InvariantCulture) : "";
     }
 
     private static string DescribePlace(string place) => place == TownPlace ? "Grove town" : "Floor " + place;
 
+    private IEnumerable<Partner> PartnersElsewhere()
+    {
+        var mine = LocalPlace();
+        return mine.Length == 0 ? Enumerable.Empty<Partner>() : partners.Values.Where(p => p.Name.Length > 0 && PartnerPlace(p.Frame).Length > 0 && PartnerPlace(p.Frame) != mine);
+    }
+
     private void TrackPartnerTravel()
     {
         if (followAnswer != null && !PromptUI.IsPromptActive) followAnswer = null;
         var mine = LocalPlace();
-        var theirs = PartnerPlace(remoteFrame);
-        if (mine.Length == 0 || theirs.Length == 0) return;
-        if (!isHost && lastPartnerPlace.Length == 0 && theirs != mine) GoToPartner();
-        if (theirs != lastPartnerPlace && lastPartnerPlace == mine && lastLocalPlace == mine && theirs != mine) pendingFollowPlace = theirs;
-        lastLocalPlace = mine;
-        lastPartnerPlace = theirs;
-        if (theirs == mine)
+        if (mine.Length == 0) return;
+        if (!isHost && !metHost && partners.TryGetValue(HostId, out var host) && PartnerPlace(host.Frame).Length > 0)
         {
-            pendingFollowPlace = "";
+            metHost = true;
+            if (PartnerPlace(host.Frame) != mine) GoToPartner(host);
+        }
+        foreach (var partner in partners.Values)
+        {
+            var theirs = PartnerPlace(partner.Frame);
+            if (theirs.Length == 0) continue;
+            if (lastPlaces.TryGetValue(partner.Id, out var before) && before == mine && lastLocalPlace == mine && theirs != mine) pendingFollow = partner.Id;
+            lastPlaces[partner.Id] = theirs;
+        }
+        lastLocalPlace = mine;
+        if (partners.Values.Any(p => PartnerPlace(p.Frame) == mine))
+        {
+            pendingFollow = Unassigned;
             if (followAnswer != null) AnswerPrompt(SingletonBehaviour<PromptUI>.Instance, false);
             return;
         }
-        if (pendingFollowPlace != theirs || InCombat || chatOpen || PromptUI.IsPromptActive || !SingletonBehaviour<PromptUI>.InstanceExists()) return;
-        pendingFollowPlace = "";
+        if (!partners.TryGetValue(pendingFollow, out var leader) || InCombat || chatOpen || MenuOpen() || !SingletonBehaviour<PromptUI>.InstanceExists()) return;
+        pendingFollow = Unassigned;
+        var place = PartnerPlace(leader.Frame);
+        if (place.Length == 0 || place == mine) return;
         followAnswer = follow =>
         {
             followAnswer = null;
-            if (follow) GoToPartner();
+            if (follow) GoToPartner(leader);
         };
-        SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw(partnerName + " went to " + DescribePlace(theirs) + ". Follow them?", followAnswer, twoButtons: true, "Yes", "No");
+        SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw(leader.Name + " went to " + DescribePlace(place) + ". Follow them?", followAnswer, twoButtons: true, "Yes", "No");
     }
 
     private static void AnswerPrompt(PromptUI prompt, bool yes) => AccessTools.Method(typeof(PromptUI), yes ? "OnButtonPositive" : "OnButtonNegative").Invoke(prompt, null);
 
-    private bool PartnerElsewhere()
+    private void GoToPartner(Partner partner)
     {
-        var mine = LocalPlace();
-        var theirs = PartnerPlace(remoteFrame);
-        return peerConnected && mine.Length > 0 && theirs.Length > 0 && theirs != mine;
-    }
-
-    private void GoToPartner()
-    {
-        if (InCombat) { Notify("You can't travel to your partner during a fight."); return; }
-        if (!PartnerElsewhere()) return;
-        var theirs = PartnerPlace(remoteFrame);
-        if (theirs == TownPlace) TravelToTown();
-        else if (!isHost)
+        if (InCombat) { Notify("You can't travel during a fight."); return; }
+        var theirs = PartnerPlace(partner.Frame);
+        if (theirs.Length == 0 || theirs == LocalPlace() || LocalPlace().Length == 0 || heldTravel != null) return;
+        arriveNear = partner.Id;
+        if (theirs == TownPlace)
         {
-            requestedWorld = remoteFrame!.worldKey;
-            Send("world-request", "");
+            TravelToTown();
+            return;
         }
-        else TravelToFloor(int.Parse(theirs, CultureInfo.InvariantCulture));
+        RequestWorld(partner.Frame!);
+        heldTravel = () => Notify("Couldn't reach " + partner.Name + "'s floor. Try again.");
+        heldUntil = Time.unscaledTime + JoinWait;
     }
 
     private void TravelToTown()
@@ -107,7 +123,12 @@ public sealed partial class Plugin
 
     private void ResetTravel()
     {
-        lastLocalPlace = lastPartnerPlace = pendingFollowPlace = "";
+        lastPlaces.Clear();
+        lastLocalPlace = "";
+        pendingFollow = arriveNear = Unassigned;
+        metHost = false;
         followAnswer = null;
+        heldTravel = null;
+        requestedWorld = "";
     }
 }

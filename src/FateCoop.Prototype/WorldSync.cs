@@ -1,47 +1,117 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
+using UnityEngine.AI;
 
 namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
+    private const string TownKey = "GroveTown";
+    private const float JoinWait = 5f, ArrivalSpacing = 1.5f;
     private readonly string sessionId = Guid.NewGuid().ToString("N");
-    private string layoutHash = "", loadedWorldKey = "";
+    private string layoutHash = "", worldKey = "", requestedWorld = "";
+    private int worldOwner = HostId, joiningOwner, arriveNear = Unassigned;
     private WorldSnapshot? pendingWorld, joiningWorld;
-    private bool sharedSession;
+    private Action? heldTravel;
+    private float heldUntil;
+    private bool heldGoesDown = true, replayingTravel;
 
     [Serializable] private sealed class WorldSnapshot
     {
-        public int version = 2;
+        public int version = 3;
         public string worldKey = "", layoutHash = "";
         public DungeonSaveData floor = null!;
         public List<int> monsterIds = new List<int>();
     }
 
+    private bool OwnsWorld => worldOwner == myId;
+
     private void InstallWorldHooks()
     {
-        harmony!.Patch(AccessTools.Method(typeof(LevelGenerator), "LoadSaveData"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeLoadFloor)));
+        harmony!.Patch(AccessTools.Method(typeof(SceneLoad), "LoadAsync", new[] { typeof(int), typeof(bool), typeof(bool), typeof(Action), typeof(bool), typeof(bool) }), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeSceneLoad)));
+        harmony.Patch(AccessTools.Method(typeof(LevelGenerator), "ReplaceDungeon"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeReplaceDungeon)));
+        harmony.Patch(AccessTools.Method(typeof(LevelGenerator), "Create"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeWorldChange)));
+        harmony.Patch(AccessTools.Method(typeof(LevelGenerator), "OnFinishCreation"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterWorldReady)));
+        harmony.Patch(AccessTools.Method(typeof(LevelGenerator), "LoadSaveData"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeLoadFloor)));
         harmony.Patch(AccessTools.Method(typeof(Monster), "UpdateAI"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeMonsterAI)));
         harmony.Patch(AccessTools.Method(typeof(Fate), "SetPause"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePause)));
     }
-    private static bool BeforePause(bool paused) => !paused || Active == null || !Active.peerConnected;
+
+    private static bool BeforePause(bool paused) => !paused || Active == null || !Active.Connected;
+
+    private static bool BeforeSceneLoad(int sceneIndex, bool save, bool withLoadingScreen, Action onDone, bool fadeIn, bool fadeOut)
+    {
+        var plugin = Active;
+        if (plugin == null) return true;
+        if (sceneIndex == (int)Tableflip.Scene.Dungeon && plugin.HoldTravel(SaveData.CurrentSaveData.GetLatestDepth(RealmData.RealmId.Grove), true,
+            () => SceneLoad.LoadAsync(sceneIndex, save, withLoadingScreen, onDone, fadeIn, fadeOut))) return false;
+        plugin.BeginWorldChange();
+        return true;
+    }
+
+    private static bool BeforeReplaceDungeon(LevelGenerator __instance, float newWorldLocationX, float newWorldLocationZ, int newLevelDepth, int newLevelRealm, bool goesDown, bool useSavedPosition, bool ignoreSavedState, bool skipSave)
+    {
+        var plugin = Active;
+        if (plugin == null) return true;
+        if (plugin.HoldTravel(newLevelDepth, goesDown, () => __instance.ReplaceDungeon(newWorldLocationX, newWorldLocationZ, newLevelDepth, newLevelRealm, goesDown, useSavedPosition, ignoreSavedState, skipSave))) return false;
+        plugin.BeginWorldChange();
+        return true;
+    }
+
+    private static void BeforeWorldChange() => Active?.BeginWorldChange();
+    private static void AfterWorldReady() => Active?.SignalWorldReady();
+
+    private bool HoldTravel(int depth, bool goesDown, Action travel)
+    {
+        if (replayingTravel || pendingWorld != null || heldTravel != null) return false;
+        var host = partners.Values.Where(p => p.Frame != null && p.Frame.scene == Tableflip.Scene.Dungeon.ToString() && p.Frame.depth == depth && p.Frame.worldKey.Length > 0 && p.Frame.owner != myId)
+            .OrderBy(p => p.Frame!.owner).FirstOrDefault();
+        if (host == null) return false;
+        RequestWorld(host.Frame!);
+        heldTravel = travel;
+        heldGoesDown = goesDown;
+        heldUntil = Time.unscaledTime + JoinWait;
+        return true;
+    }
+
+    private void RequestWorld(PeerFrame target)
+    {
+        requestedWorld = target.worldKey;
+        Send("world-request", target.worldKey, target.owner);
+    }
+
+    private void UpdateHeldTravel()
+    {
+        if (heldTravel == null || Time.unscaledTime < heldUntil) return;
+        var travel = heldTravel;
+        heldTravel = null;
+        requestedWorld = "";
+        replayingTravel = true;
+        try { travel(); }
+        finally { replayingTravel = false; }
+    }
+
     private static bool BeforeMonsterAI(Monster __instance)
     {
         var plugin = Active;
         if (plugin == null) return true;
-        if (__instance == plugin.remotePet) return false;
-        var hostOwned = plugin.monsterIds.ContainsKey(__instance) || plugin.pendingWorld != null || plugin.joiningWorld != null;
-        return !plugin.sharedSession || plugin.isHost || !hostOwned || __instance.MyVitals.IsDead || (__instance.HasMaster() && __instance.Master() == Player.PlayerChar);
+        if (plugin.PartnerOfPet(__instance) != null) return false;
+        if (__instance.MyVitals.IsDead) return __instance.GetAIState() == AIState.Dying;
+        if (plugin.OwnsWorld) return true;
+        var mirror = plugin.monsterIds.ContainsKey(__instance) || plugin.pendingWorld != null || plugin.joiningWorld != null;
+        return !mirror || (__instance.HasMaster() && __instance.Master() == Player.PlayerChar);
     }
+
     private static void BeforeLoadFloor(LevelGenerator __instance)
     {
         var plugin = Active;
-        if (plugin?.pendingWorld == null || plugin.isHost) return;
+        if (plugin?.pendingWorld == null) return;
         var world = plugin.pendingWorld;
         if (__instance.GetLevelDepth() != world.floor.depth) return;
         world.floor.droppedItems.Clear();
@@ -51,67 +121,167 @@ public sealed partial class Plugin
         realm.SetDungeonSave(world.floor.depth, world.floor);
         plugin.pendingWorld = null;
         plugin.joiningWorld = world;
-        plugin.Logger.LogInfo("HOST_FLOOR_INSTALLED depth=" + world.floor.depth);
+        plugin.Logger.LogInfo("FLOOR_INSTALLED depth=" + world.floor.depth);
     }
+
     private bool SharedWorldReady() => !transitioning && Player.PlayerChar != null && (Player.PlayerChar.Alive() || downed)
-        && (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove || (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && layoutHash.Length > 0 && CurrentWorldKey().Length > 0));
+        && (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove || (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && worldKey.Length > 0));
+
     private string CurrentWorldKey()
     {
         if (transitioning) return "";
-        if (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove) return "GroveTown";
-        if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || layoutHash.Length == 0) return "";
-        return !isHost && loadedWorldKey.Length > 0 ? loadedWorldKey : sessionId + ":" + worldEpoch + ":" + layoutHash;
+        if (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove) return TownKey;
+        return SceneLoad.CurrentScene == Tableflip.Scene.Dungeon ? worldKey : "";
     }
+
+    private IEnumerable<Partner> WorldPartners()
+    {
+        var key = LocalFrameWorld();
+        return key.Length == 0 ? Enumerable.Empty<Partner>() : partners.Values.Where(p => p.InWorld(key));
+    }
+
     private void FinalizeWorld()
     {
-        if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon) { joiningWorld = null; return; }
-        layoutHash = Fingerprint(LevelGenerator.currentInstance);
-        if (!isHost && joiningWorld != null)
+        if (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon)
         {
-            if (layoutHash == joiningWorld.layoutHash)
+            layoutHash = Fingerprint(LevelGenerator.currentInstance);
+            if (joiningWorld != null && layoutHash == joiningWorld.layoutHash)
             {
-                loadedWorldKey = joiningWorld.worldKey;
+                worldKey = joiningWorld.worldKey;
+                worldOwner = joiningOwner;
                 MatchMirrors(joiningWorld);
             }
-            else { loadedWorldKey = ""; Logger.LogError("HOST_LAYOUT_MISMATCH expected=" + joiningWorld.layoutHash + " actual=" + layoutHash); }
-            joiningWorld = null;
+            else
+            {
+                if (joiningWorld != null) Logger.LogError("FLOOR_LAYOUT_MISMATCH expected=" + joiningWorld.layoutHash + " actual=" + layoutHash);
+                worldKey = sessionId + ":" + worldEpoch + ":" + layoutHash;
+                worldOwner = myId;
+            }
         }
-        Logger.LogInfo("WORLD_LAYOUT " + layoutHash);
+        else worldOwner = partners.Values.Where(p => p.InWorld(TownKey)).Select(p => p.Frame!.owner).DefaultIfEmpty(myId).Min();
+        joiningWorld = null;
+        requestedWorld = "";
+        ArriveNearPartner();
+        Logger.LogInfo($"WORLD_READY key={CurrentWorldKey()} owner={worldOwner}");
     }
+
+    private void ArriveNearPartner()
+    {
+        var target = arriveNear;
+        arriveNear = Unassigned;
+        if (!partners.TryGetValue(target, out var partner) || partner.Frame == null || partner.Frame.worldKey != CurrentWorldKey()) return;
+        var beside = partner.Frame.primaryPosition + Quaternion.Euler(0, partner.Frame.primaryYaw, 0) * Vector3.right * ArrivalSpacing;
+        if (NavMesh.SamplePosition(beside, out var hit, 3f, NavMesh.AllAreas) || NavMesh.SamplePosition(partner.Frame.primaryPosition, out hit, 3f, NavMesh.AllAreas))
+            Player.PlayerChar.TeleportToPosition(hit.position);
+    }
+
     private WorldSnapshot ExportWorld()
     {
         var generator = LevelGenerator.currentInstance;
         generator.PreSaveTask(SaveData.CurrentSaveData);
         var floor = SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).GetDungeonSave(generator.GetLevelDepth());
-        Logger.LogInfo("HOST_WORLD_EXPORTED depth=" + floor.depth);
         return new WorldSnapshot { worldKey = CurrentWorldKey(), layoutHash = layoutHash, floor = floor, monsterIds = AssignExportIds(floor) };
     }
-    private void JoinWorld(WorldSnapshot snapshot)
+
+    private void SendWorldTo(Partner partner, string key)
+    {
+        if (!OwnsWorld || key != CurrentWorldKey() || SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || !SharedWorldReady()) return;
+        monsterStates.Clear();
+        announcedGround.Clear();
+        announcedFixtures.Clear();
+        Send("world", JsonUtility.ToJson(ExportWorld()), partner.Id);
+        Logger.LogInfo("FLOOR_SENT to=" + partner.Id);
+    }
+
+    private void ReceiveWorld(Partner partner, string body)
+    {
+        var snapshot = JsonUtility.FromJson<WorldSnapshot>(body);
+        if (snapshot == null || snapshot.worldKey != requestedWorld) return;
+        if (transitioning) { requestedWorld = ""; return; }
+        JoinWorld(partner.Id, snapshot);
+    }
+
+    private void JoinWorld(int owner, WorldSnapshot snapshot)
     {
         if (Player.PlayerChar == null || Fate.CurrentFateVer != Fate.FateVer.Original)
             throw new InvalidOperationException("Joining requires a selected Original FATE character.");
-        if (snapshot == null || snapshot.version != 2 || snapshot.floor == null || snapshot.monsterIds.Count != snapshot.floor.monsters.Count || snapshot.floor.depth < 1 || snapshot.floor.depth > 10000
+        if (snapshot.version != 3 || snapshot.floor == null || snapshot.monsterIds.Count != snapshot.floor.monsters.Count || snapshot.floor.depth < 1 || snapshot.floor.depth > 10000
             || snapshot.floor.templateIndex < 0 || snapshot.floor.templateIndex >= SingletonBehaviour<FateDB>.Instance.allTemplates.Length
             || snapshot.layoutHash.Length != 64 || snapshot.worldKey.Length > 128 || snapshot.worldKey.Length == 0)
-            throw new InvalidOperationException("Incoming world metadata is invalid.");
-        // Clone only the world record; the joiner's player, inventory and pet records remain their own.
+            throw new InvalidOperationException("Incoming floor is invalid.");
         pendingWorld = snapshot;
+        joiningOwner = owner;
+        heldTravel = null;
         if (SimpleSingletonBehaviour<PlayerUI>.Instance.IsFishing) SimpleSingletonBehaviour<PlayerUI>.Instance.HideFishingUI();
-        Player.latestStairsUsedWasDown = true;
+        Player.latestStairsUsedWasDown = heldGoesDown;
         Player.isComingFromMenu = false;
         Player.isEnteringDungeonFromTownDoor = true;
         SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm = RealmData.RealmId.Grove;
         SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).SetLastVisitedDungeonDepth(snapshot.floor.depth);
         if (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon)
-            LevelGenerator.currentInstance.ReplaceDungeon(snapshot.floor.worldLocationX, snapshot.floor.worldLocationZ, snapshot.floor.depth, (int)RealmData.RealmId.Grove, true, false);
+            LevelGenerator.currentInstance.ReplaceDungeon(snapshot.floor.worldLocationX, snapshot.floor.worldLocationZ, snapshot.floor.depth, (int)RealmData.RealmId.Grove, heldGoesDown, false);
         else SceneLoad.LoadAsync(Tableflip.Scene.Dungeon, true);
-        Logger.LogInfo("JOINING_HOST_FLOOR depth=" + snapshot.floor.depth);
+        heldGoesDown = true;
+        Logger.LogInfo("JOINING_FLOOR depth=" + snapshot.floor.depth + " owner=" + owner);
     }
+
+    private void UpdateOwnership()
+    {
+        UpdateHeldTravel();
+        var key = LocalFrameWorld();
+        if (key.Length == 0) return;
+        if (!OwnsWorld)
+        {
+            if (partners.TryGetValue(worldOwner, out var owner) && owner.InWorld(key)) return;
+            var successor = WorldPartners().Select(p => p.Id).Append(myId).Min();
+            if (successor == myId) TakeOwnership();
+            else worldOwner = successor;
+            return;
+        }
+        var rival = WorldPartners().Where(p => p.Frame!.owner == p.Id && p.Id < myId).Select(p => p.Id).DefaultIfEmpty(Unassigned).Max();
+        if (rival != Unassigned) { YieldOwnership(rival); return; }
+        if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || WorldPartners().Any() || requestedWorld.Length > 0 || heldTravel != null) return;
+        var depth = LevelGenerator.currentInstance.GetLevelDepth();
+        var other = partners.Values.Select(p => p.Frame).Where(f => f != null && f.scene == Tableflip.Scene.Dungeon.ToString() && f.depth == depth && f.worldKey.Length > 0 && f.worldKey != key && f.owner < myId)
+            .OrderBy(f => f!.owner).FirstOrDefault();
+        if (other != null) RequestWorld(other);
+    }
+
+    private void TakeOwnership()
+    {
+        worldOwner = myId;
+        foreach (var monster in monsters.Values.Where(m => m != null))
+        {
+            monster.allowDropInventory = true;
+            monster.allowDropEquipment = true;
+        }
+        monsterStates.Clear();
+        attackingMirrors.Clear();
+        nextMonsterId = monsters.Keys.DefaultIfEmpty(0).Max() + 1;
+        RealizeGround();
+        Logger.LogInfo("OWNERSHIP_TAKEN key=" + CurrentWorldKey());
+    }
+
+    private void YieldOwnership(int owner)
+    {
+        worldOwner = owner;
+        foreach (var obj in ground.Values) RemoveGroundObject(obj);
+        ResetGround();
+        foreach (var monster in monsters.Values.Where(m => m != null))
+        {
+            monster.allowDropInventory = false;
+            monster.allowDropEquipment = false;
+        }
+        monsterStates.Clear();
+        Logger.LogInfo("OWNERSHIP_YIELDED to=" + owner);
+    }
+
     private static string Hash(byte[] bytes)
     {
         using var sha = SHA256.Create();
         return BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "");
     }
+
     private static string Fingerprint(LevelGenerator generator)
     {
         var maze = (MazeCreation)AccessTools.Field(typeof(LevelGenerator), "activeDungeon").GetValue(generator);
@@ -131,12 +301,5 @@ public sealed partial class Plugin
         { writer.Write(p.x); writer.Write(p.y); writer.Write(p.z); }
         writer.Flush();
         return Hash(stream.ToArray());
-    }
-    private void LeaveSharedWorld()
-    {
-        sharedSession = false;
-        ResetMonsters();
-        ResetGround();
-        DespawnRemotePet();
     }
 }

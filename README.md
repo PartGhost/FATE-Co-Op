@@ -1,20 +1,21 @@
 # FATE Co-Op
 
-Online two-player co-op for **FATE: Reawakened** (Original FATE, Grove), played through Steam with a friend.
+Online co-op for **FATE: Reawakened** (Original FATE, Grove) for 2 to 16 players, played through Steam with friends.
 
-> Unofficial fan mod. Not made, endorsed or supported by the developers or publisher of FATE: Reawakened. Both players need their own copy of the game on Steam.
+> Unofficial fan mod. Not made, endorsed or supported by the developers or publisher of FATE: Reawakened. Every player needs their own copy of the game on Steam.
 
 ## Features
 
-- Shared dungeon floors: same monsters, same loot, same chests and barrels. Kills give XP to both players.
-- Your partner shows with their Steam name, their look, their gear and their pet, plus a party portrait with health and mana.
+- Shared dungeon floors: same monsters, same loot, same chests and barrels. Kills give XP to everyone on the floor.
+- Friends show with their Steam names, their looks, their gear and their pets, plus party portraits with health and mana.
 - Attacks, spells, effects, damage numbers, level-ups and fishing show for both players.
-- Party quests: the host's quests are shared, and both players get the reward.
-- Go where you like. Same floor (or both in town) means you play together. When your partner leaves you're asked if you want to follow, and "Go to partner" in the Escape menu takes you to them (not during a fight).
-- Revive: dying near your partner puts you down instead. They stand next to you for 4 seconds to get you up. After 30 seconds you die for real.
-- Text chat.
+- Shared quests in the real quest log: anyone's kills and quest items count, and everyone gets the reward.
+- Go where you like. Same floor (or town) means you play together, and joining a floor someone is already on never reloads it. When everyone leaves your floor you're asked if you want to follow, and "Go to <name>" in the Escape menu takes you next to them (not during a fight).
+- Revive: dying near a friend puts you down instead. A friend stands next to you for 4 seconds to get you up. After 30 seconds you die for real.
+- Heal and buff friends by hovering them and casting. Town portals work for everyone.
+- Text chat with speech bubbles.
 - WASD movement and a middle-mouse camera.
-- Monsters get tougher while your partner is on the floor.
+- Monsters get tougher for each extra player on the floor, and they go after whoever is doing the most damage.
 
 ## Requirements
 
@@ -35,7 +36,7 @@ Every install and update first backs up your saves to `Documents\FATE Co-Op save
 
 ## Playing
 
-- **Host:** on the main menu choose **Co-op > Host co-op**, or press Escape in game and choose **Host co-op**. Then **Invite friend** from the Escape menu.
+- **Host:** on the main menu choose **Co-op**, set the number of players with the arrows, then **Host co-op**. Or press Escape in game and choose **Host co-op**. Then **Invite friend** from the Escape menu.
 - **Join:** accept the Steam invite, or choose **Co-op > Join a friend** and right-click your friend > Join Game. You're taken into the game and to the host automatically.
 - **Leave:** Escape > **Leave co-op**.
 
@@ -47,11 +48,11 @@ Every install and update first backs up your saves to `Documents\FATE Co-Op save
 | Enter | Chat (Enter sends, Escape cancels) |
 | F11 | Hide the co-op overlays |
 
-`BepInEx\config\local.fatecoop.prototype.cfg` in the game folder has a few settings: keyboard movement, camera turn speed and monster toughness.
+`BepInEx\config\local.fatecoop.prototype.cfg` in the game folder has a few settings: lobby size, keyboard movement, camera turn speed and monster toughness.
 
 ## Known limits
 
-- Two players only, Grove (Original FATE) only.
+- Grove (Original FATE) only. Tested with up to 3 players; bigger groups need a good upload speed on the host.
 - Closing the game window while you're down skips the death. Save & Quit while down counts as dying.
 - Monster spells don't draw their projectiles on the joining player's screen (the damage still lands).
 
@@ -60,7 +61,7 @@ Every install and update first backs up your saves to `Documents\FATE Co-Op save
 - `src/FateCoop.Prototype`: the BepInEx plugin.
 - `src/FateCoop.Installer`: the installer (WinForms on the .NET Framework built into Windows).
 - `src/SandboxPatcher`: patches the two local test copies of the game so their saves stay separate. Development only.
-- `tools/`: build, release (`Build-Release.ps1`) and two-instance test scripts. `docs/prototype.md` has the version-by-version design notes.
+- `tools/`: build, release (`Build-Release.ps1`) and multi-instance test scripts. `docs/prototype.md` has the version-by-version design notes.
 
 Builds need the local tool folders listed in `.gitignore` (portable .NET SDK, BepInEx, Mono.Cecil). Game assemblies, decompiled sources and saves are never committed or shipped.
 

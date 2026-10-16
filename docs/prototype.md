@@ -1,3 +1,37 @@
+# Grove co-op prototype — 0.17.0
+
+## Up to 16 players
+
+- **Lobby size.** Main menu, Co-op: a "< 2 players >" picker (click either half, or left/right while it's selected) sets `[Co-op] Players` (2 to 16, default 2). Host co-op in the Escape menu uses the same setting.
+- **Star network.** Guests talk only to the host; the host relays. The host stamps each guest message with that guest's id (0 is the host) and sends a `welcome` with the id when it first hears from a guest. Envelopes carry `from`, `to` (-1 for everyone) and an optional `world` key; world-scoped messages are dropped by anyone not in that world. Position frames are relayed at full rate only between players in the same world, otherwise at 2 Hz. A guest whose version differs gets a `mismatch` and the host keeps running. `left` tells guests someone dropped.
+- **Per-player state.** `Partner` holds each player's frame, profile, replica, pet, pose trails, clock offset, animation counters, fishing pole, portal and HUD slots. Hooks find stand-ins with `PartnerOf` / `PartnerOfPet`.
+
+## Floor owners instead of a host-owned world
+
+- Whoever reaches a floor first runs it (monsters, loot, chests). Frames carry `worldKey` and `owner`. Arriving at a floor where someone already is loads their floor: `ReplaceDungeon` and `LoadAsync(Dungeon)` are held while the owner sends the snapshot, and replayed after 5 seconds if no answer comes. That removes the double load, the forced reload when coming back, and the reload after the Fate choice.
+- When the owner leaves, the lowest id left on the floor takes over without reloading: mirrors become real monsters (they're registered with `AddMonsterToActiveMonsters` when spawned, so the new owner keeps tracking them), ground copies become real drops. Two owners in one world (a rejoin, a race into town) resolve to the lower id; the loser drops its ground copies and turns its monsters into mirrors.
+- "Go to <name>" and following land you next to that player (`TeleportToPosition` after arrival). The follow prompt only appears once everyone has left your floor, never during a fight, while typing, or with a menu open.
+- Hits, effects, strikes, hurts, kills (with the killer's id for kill credit), drops, takes and fixtures go to or come from the floor owner. Monster toughness scales with the number of other players on the floor.
+
+## Shared quests
+
+- The host's Grove side quests are everyone's quests, shown in each player's real quest log. Guests swap the host's list into their `QuestManager` (reinstalled after every `LoadSave`) and swap their own list back around `FlushSave`, so their save never holds host quests; it comes back when they leave.
+- Kills and quest items count on whichever game sees them; guests report progress (lower kill counts, completed) and the host merges it. Taking, cancelling or turning in a quest on a guest goes to the host; a turn-in from either side rewards everyone once.
+- `RemoveQuestItem` no longer logs "Failed to find Quest Item" when another player holds the item. The story quest stays personal.
+
+## Fixes and polish
+
+- Partners run instead of walk (`Running()` in the frame, `IsRunning` on the replica). Monster mirrors animate (bools set in a `Monster.Update` postfix so pathing can't clear them). Dead monsters can't be switched back to living states, and mirrors don't spawn their own minions.
+- Threat: the floor owner tracks decaying damage per attacker (pets count for their master) and a hit monster switches to the top threat when it beats the current target by 20%.
+- Heals and buffs: hover a partner and cast a friendly spell that needs a target; party-wide spells also reach partners on your floor. The effect is forwarded to the real player.
+- Town portals show for everyone on the floor and anyone can step through; using a friend's portal records it as your own so you can come back.
+- Boss health bars update on mirrors. Chests open and barrels break with their real animation and sound. The minimap and its icons (including the tilted quest "!") turn with the camera. Partners get the blue behind-wall marker; their pets lose theirs. Name tags hide while any menu is open. Party portraits keep their picture while a player travels. No "ally recovered" line when a partner gets up.
+- Revive: any player on your floor can revive you. The bars use a clone of the game's target bar (green poisoned fill for reviving, red for bleeding out). Chat reads Enter and Escape from the game's input system, so Enter both opens and closes it, and messages float over the speaker.
+
+## Tests
+
+Three local copies (`test-game`, `-b`, `-c`; `tools/Instances.ps1` names their folders). `Start-Games.ps1`, `Connect-Games.ps1` and `Enter-HostDungeon.ps1` take `-Instances`. `Test-ThreePlayers.ps1` covers three players on one floor, hits from the third player, chat to all, the floor handover and rejoining the new owner. `Test-SharedQuests.ps1` also covers a guest turn-in. `Test-Lifecycle.ps1` and the single-player test guest were removed.
+
 # Grove co-op prototype — 0.16.0
 
 ## Installer instead of the game copy

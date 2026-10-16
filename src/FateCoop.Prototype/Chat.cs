@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Cleverous.Prodigy.Input;
+using Cleverous.ThatHurtModule;
 using Tableflip;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -10,20 +11,26 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const int ChatHistory = 8, ChatMaxLength = 200;
-    private const float ChatFadeSeconds = 10f, ChatLineHeight = 22f, ChatWidth = 420f;
+    private const float ChatFadeSeconds = 10f, ChatLineHeight = 22f, ChatWidth = 420f, BubbleHeight = 2.6f, BubbleSize = 0.9f;
     private readonly List<(string line, float time)> chatLines = new List<(string, float)>();
     private string chatDraft = "";
     private bool chatOpen;
-    private int chatOpenedFrame, chatReceived;
+    private int chatReceived;
     private GUIStyle? chatStyle;
 
     private void UpdateChat()
     {
         var keyboard = Keyboard.current;
-        if (chatOpen || !peerConnected || keyboard == null || !keyboard.enterKey.wasPressedThisFrame || transitioning || Player.PlayerChar == null
-            || PauseUI.IsShown || PromptUI.IsPromptActive || SingletonBehaviour<InputBroker>.Instance.ActiveInputMode != InputBroker.InputMode.Game) return;
+        if (keyboard == null) return;
+        var enter = keyboard.enterKey.wasPressedThisFrame || keyboard.numpadEnterKey.wasPressedThisFrame;
+        if (chatOpen)
+        {
+            if (enter) SendChat(chatDraft);
+            if (enter || keyboard.escapeKey.wasPressedThisFrame) CloseChat();
+            return;
+        }
+        if (!enter || !Connected || transitioning || Player.PlayerChar == null || MenuOpen()) return;
         chatOpen = true;
-        chatOpenedFrame = Time.frameCount;
         chatDraft = "";
         SingletonBehaviour<InputBroker>.Instance.DisableAllInput();
     }
@@ -42,20 +49,21 @@ public sealed partial class Plugin
         if (text.Length == 0) return;
         if (text.Length > ChatMaxLength) text = text.Substring(0, ChatMaxLength);
         Send("chat", text);
-        AddChatLine(LocalName(), text);
+        AddChatLine(LocalName(), text, Player.PlayerChar);
     }
 
-    private void ReceiveChat(string text)
+    private void ReceiveChat(Partner partner, string text)
     {
         if (text.Length == 0 || text.Length > ChatMaxLength) throw new InvalidOperationException("Invalid chat message.");
-        AddChatLine(partnerName, text);
+        AddChatLine(partner.Name, text, partner.Actor);
         chatReceived++;
     }
 
-    private void AddChatLine(string name, string text)
+    private void AddChatLine(string name, string text, Character? speaker)
     {
         chatLines.Add((name + ": " + text, Time.unscaledTime));
         if (chatLines.Count > ChatHistory) chatLines.RemoveAt(0);
+        if (speaker != null && ThatHurt.Instance != null) ThatHurt.PopText(speaker.transform.position + Vector3.up * BubbleHeight, text, BubbleSize, ChatFadeSeconds / 2f, ThatHurt.ThatHurtColor.White, 0f);
     }
 
     private void DrawChat(float bottom)
@@ -63,23 +71,6 @@ public sealed partial class Plugin
         chatStyle ??= new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, wordWrap = false };
         if (chatOpen)
         {
-            var current = Event.current;
-            if (current.type == EventType.KeyDown && Time.frameCount != chatOpenedFrame)
-            {
-                if (current.keyCode == KeyCode.Return || current.keyCode == KeyCode.KeypadEnter)
-                {
-                    SendChat(chatDraft);
-                    CloseChat();
-                    current.Use();
-                    return;
-                }
-                if (current.keyCode == KeyCode.Escape)
-                {
-                    CloseChat();
-                    current.Use();
-                    return;
-                }
-            }
             bottom -= ChatLineHeight + 4f;
             GUI.SetNextControlName("FateCoopChat");
             chatDraft = GUI.TextField(new Rect(12f, bottom, ChatWidth, ChatLineHeight + 2f), chatDraft, ChatMaxLength);

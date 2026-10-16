@@ -1,7 +1,8 @@
-param([Parameter(Mandatory)][string]$Command, [ValidateSet('a','b')][string]$Instance = 'a')
+param([Parameter(Mandatory)][string]$Command, [ValidateSet('a','b','c')][string]$Instance = 'a')
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path -Parent $PSScriptRoot
-$queue = Join-Path $workspace $(if ($Instance -eq 'a') { 'artifacts\runtime\commands' } else { 'artifacts\runtime-b\commands' })
+. (Join-Path $PSScriptRoot 'Instances.ps1')
+$queue = Join-Path (Get-RuntimePath $Instance) 'commands'
 New-Item -ItemType Directory -Force -Path $queue | Out-Null
 $name = [DateTime]::UtcNow.ToString('yyyyMMddHHmmssfffffff') + '-' + [Guid]::NewGuid().ToString('N')
 $staged = Join-Path $queue ($name + '.tmp')

@@ -17,7 +17,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    private Coroutine? route, testWalk;
+    private Coroutine? testWalk;
     private float nextPoll, nextSnapshot;
     private Monster? aggroMonster;
 
@@ -36,14 +36,10 @@ public sealed partial class Plugin
 
     private static EffectData TestBlast() => new EffectData(EffectType.HP, positive: false, ActivationType.Usage, -900, -10, 0f);
 
-    private void UpdateDevTools(Keyboard? keyboard)
+    private Partner? FirstPartner => partners.Values.FirstOrDefault(p => p.Actor != null);
+
+    private void UpdateDevTools()
     {
-        if (keyboard != null)
-        {
-            if (keyboard.f8Key.wasPressedThisFrame) { if (actor != null) Despawn(); else Spawn(); }
-            if (keyboard.f9Key.wasPressedThisFrame) StartRoute();
-            if (keyboard.f10Key.wasPressedThisFrame) StopRoute();
-        }
         if (Time.unscaledTime >= nextPoll)
         {
             nextPoll = Time.unscaledTime + 0.2f;
@@ -64,10 +60,6 @@ public sealed partial class Plugin
         if (parts.Length == 0) return;
         switch (parts[0])
         {
-            case "spawn": Spawn(); break;
-            case "despawn": Despawn(); break;
-            case "route": StartRoute(); break;
-            case "stop": StopRoute(); break;
             case "status": Snapshot(); break;
             case "save": SaveData.RequestSave(); break;
             case "test-hit":
@@ -84,7 +76,8 @@ public sealed partial class Plugin
                 Player.PlayerChar.StartAttack();
                 break;
             case "test-aggro":
-                if (!isHost || actor == null) throw new InvalidOperationException("test-aggro needs the host with a connected partner.");
+                var actor = FirstPartner?.Actor;
+                if (!OwnsWorld || actor == null) throw new InvalidOperationException("test-aggro needs the floor owner with a partner nearby.");
                 if (aggroMonster == null || aggroMonster.MyVitals.IsDead)
                 {
                     aggroMonster = NearestEnemy(actor.transform.position) ?? throw new InvalidOperationException("No enemy near the partner.");
@@ -122,22 +115,23 @@ public sealed partial class Plugin
                 barrel.Destroyed();
                 break;
             case "test-accept-quest":
-                var giver = UnityEngine.Object.FindObjectsOfType<QuestGiver>().FirstOrDefault() ?? throw new InvalidOperationException("No quest giver here.");
+                var giver = UnityEngine.Object.FindObjectsOfType<QuestGiver>().OrderBy(g => g.CharacterName, StringComparer.Ordinal).ElementAtOrDefault(parts.Length > 1 ? int.Parse(parts[1], CultureInfo.InvariantCulture) : 0) ?? throw new InvalidOperationException("No quest giver here.");
                 var offered = SingletonBehaviour<QuestManager>.Instance.GetQuestForQuestGiver(giver.CharacterName);
                 if (offered.Status == Quest.QuestStatus.None) SingletonBehaviour<QuestManager>.Instance.AcceptQuest(offered, giver.CharacterName);
                 break;
             case "test-finish-quest":
-                var finished = ActiveQuests().FirstOrDefault(q => q.realmQuestData == null) ?? throw new InvalidOperationException("No side quest to finish.");
+                var finished = SideQuests[QuestRealm].FirstOrDefault(q => q != null && (q.Status == Quest.QuestStatus.Accepted || q.Status == Quest.QuestStatus.Completed)) ?? throw new InvalidOperationException("No side quest to finish.");
                 finished.Status = Quest.QuestStatus.Completed;
-                SingletonBehaviour<QuestManager>.Instance.ClaimRewards(finished.QuestGiverName);
+                if (parts.Length < 2 || parts[1] != "only") Quests.ClaimRewards(finished.QuestGiverName);
                 break;
             case "test-effect":
                 var poisoner = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
                 (NearestEnemy(poisoner.transform.position) ?? throw new InvalidOperationException("No enemy to hit.")).AddEffect(TestBlast(), poisoner.Level, poisoner);
                 break;
             case "test-effect-partner":
-                if (!isHost || actor == null) throw new InvalidOperationException("test-effect-partner needs the host with a connected partner.");
-                actor.AddEffect(TestBlast(), 1, NearestEnemy(actor.transform.position) ?? throw new InvalidOperationException("No enemy near the partner."));
+                var poisoned = FirstPartner?.Actor;
+                if (!OwnsWorld || poisoned == null) throw new InvalidOperationException("test-effect-partner needs the floor owner with a partner nearby.");
+                poisoned.AddEffect(TestBlast(), 1, NearestEnemy(poisoned.transform.position) ?? throw new InvalidOperationException("No enemy near the partner."));
                 break;
             case "test-glow":
                 var glowing = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
@@ -243,8 +237,9 @@ public sealed partial class Plugin
                 Player.PlayerChar.MyVitals.Die();
                 break;
             case "test-near-partner":
-                if (Player.PlayerChar == null || actor == null) throw new InvalidOperationException("No partner replica to walk to.");
-                Player.PlayerChar.GetComponent<NavMeshAgent>().Warp(actor.transform.position + actor.transform.right * 1.5f);
+                var near = (parts.Length > 1 && partners.TryGetValue(int.Parse(parts[1], CultureInfo.InvariantCulture), out var chosen) ? chosen : FirstPartner)?.Actor;
+                if (Player.PlayerChar == null || near == null) throw new InvalidOperationException("No partner replica to walk to.");
+                Player.PlayerChar.GetComponent<NavMeshAgent>().Warp(near.transform.position + near.transform.right * 1.5f);
                 break;
             case "test-chat":
                 SendChat(string.Join(" ", parts, 1, parts.Length - 1));
@@ -257,7 +252,7 @@ public sealed partial class Plugin
                 break;
             case "follow-partner":
                 if (followAnswer != null) AnswerPrompt(SingletonBehaviour<PromptUI>.Instance, true);
-                else GoToPartner();
+                else GoToPartner((parts.Length > 1 && partners.TryGetValue(int.Parse(parts[1], CultureInfo.InvariantCulture), out var leader) ? leader : PartnersElsewhere().FirstOrDefault()) ?? throw new InvalidOperationException("Nobody to go to."));
                 break;
             case "menu":
                 if (!SaveData.HasLoaded || Player.PlayerChar != null) throw new InvalidOperationException("Wait for startup, and use menu only before entering gameplay.");
@@ -287,165 +282,82 @@ public sealed partial class Plugin
                 if (SingletonBehaviour<StoryUI>.InstanceExists())
                     AccessTools.Method(typeof(StoryUI), "OnContinueButton").Invoke(SingletonBehaviour<StoryUI>.Instance, null);
                 break;
-            case "move":
-            case "primary-move":
-                if (parts.Length != 3) throw new ArgumentException("move <x> <z>");
-                var target = parts[0] == "move" ? (Character?)actor : Player.PlayerChar;
-                if (target == null) throw new InvalidOperationException("Requested actor does not exist.");
-                if (target == actor) StopRoute();
-                Move(target, new Vector3(float.Parse(parts[1], CultureInfo.InvariantCulture), 0, float.Parse(parts[2], CultureInfo.InvariantCulture)));
-                break;
-            case "quit": Despawn(); Application.Quit(); break;
+            case "quit": Application.Quit(); break;
             default: throw new ArgumentException("Unknown prototype command: " + parts[0]);
         }
     }
 
-    private void Move(Character character, Vector3 desired)
-    {
-        if (!NavMesh.SamplePosition(desired, out var hit, 10f, NavMesh.AllAreas))
-            throw new InvalidOperationException("Destination is outside the navigation mesh.");
-        var agent = character.GetComponent<NavMeshAgent>();
-        var path = new NavMeshPath();
-        if (!agent.CalculatePath(hit.position, path) || path.status != NavMeshPathStatus.PathComplete)
-            throw new InvalidOperationException("Destination is unreachable.");
-        character.SetDestination(hit.position.x, hit.position.z);
-        Logger.LogInfo($"MOVE actor={character.GetInstanceID()} destination={hit.position}");
-    }
-
-    private void StartRoute()
-    {
-        if (actor == null) Spawn();
-        StopRoute();
-        route = StartCoroutine(WalkRoute());
-    }
-
-    private IEnumerator WalkRoute()
-    {
-        var guest = actor!;
-        var host = primary!;
-        var origin = guest.transform.position;
-        var primaryOrigin = host.transform.position;
-        var hostId = host.GetInstanceID();
-        var peakGuestTravel = 0f;
-        var peakHostTravel = 0f;
-        SetStatus("Scripted client is walking the guest.");
-        // A short out-and-back route is easier to verify than unconstrained wandering.
-        var offsets = new[] { Vector3.right * 8f, Vector3.forward * 8f, Vector3.left * 8f, Vector3.zero };
-        foreach (var offset in offsets)
-        {
-            if (guest == null || host == null) yield break;
-            try { Move(guest, origin + offset); }
-            catch (Exception e) { Logger.LogWarning("ROUTE_WAYPOINT_SKIPPED " + e.Message); continue; }
-            var agent = guest.GetComponent<NavMeshAgent>();
-            var deadline = Time.unscaledTime + 12f;
-            do
-            {
-                yield return null;
-                if (guest == null || host == null) yield break;
-                peakGuestTravel = Math.Max(peakGuestTravel, Vector3.Distance(origin, guest.transform.position));
-                peakHostTravel = Math.Max(peakHostTravel, Vector3.Distance(primaryOrigin, host.transform.position));
-            } while (Time.unscaledTime < deadline && (agent.pathPending || (agent.hasPath && agent.remainingDistance > Math.Max(agent.stoppingDistance, 0.4f))));
-        }
-        guest.StopPathing();
-        route = null;
-        var result = new RouteResult { guestTravel = peakGuestTravel, primaryTravel = peakHostTravel, primaryIdentityPreserved = Player.PlayerChar != null && Player.PlayerChar.GetInstanceID() == hostId, aiCallsSuppressed = suppressedAI };
-        File.WriteAllText(Path.Combine(controlRoot, "route-result.json"), JsonUtility.ToJson(result, true));
-        Logger.LogInfo("ROUTE_RESULT " + JsonUtility.ToJson(result));
-        SetStatus("Walking route complete. Check route-result.json for measured independence.");
-    }
-
     private IEnumerator TestPrimaryWalk(Vector3 direction)
     {
-        // Test fixture: move the local primary through its real navigation agent, not a transform teleport.
-        if (float.IsNaN(direction.x) || float.IsNaN(direction.z) || float.IsInfinity(direction.x) || float.IsInfinity(direction.z)) yield break;
-        var host = Player.PlayerChar;
-        var start = host.transform.position;
-        var id = host.GetInstanceID();
-        var agent = host.GetComponent<NavMeshAgent>();
+        var player = Player.PlayerChar;
+        var agent = player.GetComponent<NavMeshAgent>();
         var end = Time.unscaledTime + 3f;
-        while (Time.unscaledTime < end && host != null && Player.PlayerChar == host && !transitioning)
+        while (Time.unscaledTime < end && player != null && Player.PlayerChar == player && !transitioning)
         {
             yield return new WaitForEndOfFrame();
             if (agent != null && agent.isOnNavMesh && !Fate.isPaused)
             {
                 agent.Move(direction.normalized * 1.5f * Time.deltaTime);
-                host.TurnTowardPosition(host.transform.position + direction);
+                player.TurnTowardPosition(player.transform.position + direction);
             }
         }
-        File.WriteAllText(Path.Combine(controlRoot, "primary-walk-result.json"), JsonUtility.ToJson(new RouteResult { primaryTravel = host != null ? Vector3.Distance(start, host.transform.position) : 0, primaryIdentityPreserved = Player.PlayerChar != null && Player.PlayerChar.GetInstanceID() == id }, true));
         testWalk = null;
     }
 
     private void Snapshot()
     {
         if (string.IsNullOrEmpty(controlRoot)) return;
-        var host = Player.PlayerChar;
+        var player = Player.PlayerChar;
+        var partner = FirstPartner;
+        var actor = partner?.Actor;
+        var pet = partner?.Pet;
         var agent = actor != null ? actor.GetComponent<NavMeshAgent>() : null;
         var animator = actor != null ? actor.GetComponent<Animator>() : null;
-        var renderers = actor != null ? actor.GetComponentsInChildren<Renderer>(true) : Array.Empty<Renderer>();
-        var visibleMeshes = renderers.OfType<SkinnedMeshRenderer>().Where(r => r.enabled && r.gameObject.activeInHierarchy && r.sharedMesh != null && r.sharedMesh.vertexCount > 0).ToArray();
         var telemetry = new Telemetry
         {
             time = Time.unscaledTime, scene = SceneManager.GetActiveScene().name, status = status,
-            primaryId = host != null ? host.GetInstanceID() : 0, guestId = actor != null ? actor.GetInstanceID() : 0,
-            primaryPosition = host != null ? host.transform.position : Vector3.zero,
+            primaryId = player != null ? player.GetInstanceID() : 0, guestId = actor != null ? actor.GetInstanceID() : 0,
+            primaryPosition = player != null ? player.transform.position : Vector3.zero,
             guestPosition = actor != null ? actor.transform.position : Vector3.zero,
-            guestOnNavMesh = agent != null && agent.isOnNavMesh, guestVelocity = agent != null ? agent.velocity : Vector3.zero,
-            guestWalking = animator != null && animator.GetBool("IsWalking"), spawnedTotal = spawnCount,
-            aiCallsSuppressed = suppressedAI, saveLoaded = SaveData.HasLoaded,
-            steamInitialized = SteamReady,
-            campaign = Fate.CurrentFateVer.ToString(), renderers = renderers.Length,
+            guestOnNavMesh = agent != null && agent.isOnNavMesh, guestWalking = animator != null && animator.GetBool("IsWalking"), guestRunning = animator != null && animator.GetBool("IsRunning"),
+            spawnedTotal = spawnCount, aiCallsSuppressed = suppressedAI, saveLoaded = SaveData.HasLoaded, steamInitialized = SteamReady, campaign = Fate.CurrentFateVer.ToString(),
             worldEpoch = worldEpoch, transitioning = transitioning, dungeonDepth = LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth() : 0,
-            networkConnected = peerConnected, networkAccepted = networkAccepted, networkRejected = networkRejected,
+            networkConnected = Connected, networkAccepted = networkAccepted, networkRejected = networkRejected, myId = myId, worldOwner = worldOwner, ownsWorld = OwnsWorld,
+            partnerCount = partners.Count, partnersInWorld = WorldPartners().Count(),
             sessionRole = link == null ? "" : isHost ? "host" : "guest", localPort = link is LocalLink local ? local.Port : 0,
-            worldReady = worldReady, paused = Fate.isPaused, primaryAlive = host != null && host.Alive(),
-            layoutHash = layoutHash, worldKey = CurrentWorldKey(), sharedSession = sharedSession,
-            localPetJson = JsonUtility.ToJson(LocalPetSnapshot()), remotePetId = remotePet != null ? remotePet.GetInstanceID() : 0,
-            remotePetPosition = remotePet != null ? remotePet.transform.position : Vector3.zero,
-            remotePetModel = remotePetModel, localPetCount = host != null ? host.GetPetCount() : 0,
-            remotePetActors = Object.FindObjectsOfType<Character>().Count(c => c.name == "FateCoop_Remote_Pet"),
-            remotePetMeshes = remotePet != null ? remotePet.GetComponentsInChildren<SkinnedMeshRenderer>().Count(r => r.enabled && r.isVisible) : 0,
-            remoteName = actor != null ? actor.CharacterName : "", monstersTracked = monsters.Count, worldMonsters = Object.FindObjectsOfType<Monster>().Count(m => !m.IsPet() && m != remotePet), aggro = aggroMonster == null ? "" : $"{aggroMonster.GetAIState()} target={(aggroMonster.Target() != null ? aggroMonster.Target().name : "none")} distance={(actor != null ? Vector3.Distance(aggroMonster.transform.position, actor.transform.position) : -1f):0.0} range={aggroMonster.InAttackRange()} facing={aggroMonster.FacingTarget()} attacking={aggroMonster.GetComponent<Animator>().GetBool("IsAttacking")} key={aggroMonster.monsterData.displayName} attack={CurrentAttackField.GetValue(aggroMonster) != null} timer={aggroMonster.attackTimer:0.00} paused={Fate.isPaused}",
+            worldReady = worldReady, paused = Fate.isPaused, primaryAlive = player != null && player.Alive(),
+            layoutHash = layoutHash, worldKey = CurrentWorldKey(),
+            localPetCount = player != null ? player.GetPetCount() : 0,
+            remotePetActors = partners.Values.Count(p => p.Pet != null), remotePetModel = partner?.PetModel ?? "",
+            remotePetPosition = pet != null ? pet.transform.position : Vector3.zero,
+            remoteName = partner?.Name ?? "", monstersTracked = monsters.Count, worldMonsters = Object.FindObjectsOfType<Monster>().Count(m => !m.IsPet() && PartnerOfPet(m) == null),
+            aggro = aggroMonster == null ? "" : $"{aggroMonster.GetAIState()} target={(aggroMonster.Target() != null ? aggroMonster.Target().name : "none")}",
             trackedHp = Mathf.RoundToInt(monsters.Values.Where(m => m != null).Sum(m => m.hp)), trackedDead = monsters.Values.Count(m => m != null && m.MyVitals.IsDead),
             hitsSent = hitsSent, hitsApplied = hitsApplied, strikesSent = strikesSent, strikesTaken = strikesTaken, killsSent = killsSent, killsTaken = killsTaken,
-            swingsPlayed = swingsPlayed, castsPlayed = castsPlayed, groundItems = ground.Count(entry => entry.Value != null && (!isHost || announcedGround.Contains(entry.Key))),
+            swingsPlayed = swingsPlayed, castsPlayed = castsPlayed, groundItems = ground.Count(entry => entry.Value != null && (!OwnsWorld || announcedGround.Contains(entry.Key))),
             lootGiven = lootGiven, lootTaken = lootTaken, questRewardsSent = questRewardsSent, questRewardsTaken = questRewardsTaken, effectsSent = effectsSent, effectsTaken = effectsTaken, damagePopups = damagePopups, spellsReplayed = spellsReplayed, arrowsDrawn = arrowsDrawn, levelUpsPlayed = levelUpsPlayed,
             remoteEffects = actor != null && shownEffects.TryGetValue(actor, out var actorEffects) ? string.Join(",", actorEffects) : "", mirrorEffects = shownEffects.Where(entry => entry.Key is Monster).Sum(entry => entry.Value.Count),
-            replicaFishing = replicaFishing, localFishing = LocalFishing(), cameraZoom = Cleverous.Prodigy.ProdigyCamera.Instance != null ? Cleverous.Prodigy.ProdigyCamera.Instance.GameCam.transform.localPosition.z : 0f, cameraYaw = Cleverous.Prodigy.ProdigyCamera.Instance != null ? Cleverous.Prodigy.ProdigyCamera.Instance.transform.eulerAngles.y : 0f, localWeaponParticles = WeaponParticles(host), replicaWeaponParticles = WeaponParticles(actor), partyQuests = partyQuests, dropsSent = dropsSent, bagItems = host != null ? host.inventory.Count : 0,
-            openChests = UnityEngine.Object.FindObjectsOfType<ContainerInteractable>().Count(c => c.IsOpen), brokenBarrels = UnityEngine.Object.FindObjectsOfType<ContainerDestroyable>().Count(b => b.IsDestroyed), primaryHp = host != null ? host.hp : 0f, primaryExperience = host != null ? (long)host.experience : 0,
-            primaryOnNavMesh = host != null && host.GetComponent<NavMeshAgent>() != null && host.GetComponent<NavMeshAgent>().isOnNavMesh,
-            gameScene = SceneLoad.CurrentScene.ToString(), followPrompt = followAnswer != null, inCombat = InCombat, partnerElsewhere = PartnerElsewhere(), downed = downed, replicaDown = replicaDown, reviveProgress = reviveProgress, chatReceived = chatReceived, lastChat = chatLines.Count > 0 ? chatLines[chatLines.Count - 1].line : "", fateChoice = SingletonBehaviour<FateChoiceUI>.InstanceExists() && FateChoiceUI.FateChoiceActive,
-            activeMeshes = visibleMeshes.Length, meshesSeenByCamera = visibleMeshes.Count(r => r.isVisible),
-            prototypeActors = Object.FindObjectsOfType<PartyMember>().Count(p => p.name == "FateCoop_Prototype_Guest")
+            replicaFishing = partner?.Fishing ?? 0, localFishing = LocalFishing(), cameraZoom = Cleverous.Prodigy.ProdigyCamera.Instance != null ? Cleverous.Prodigy.ProdigyCamera.Instance.GameCam.transform.localPosition.z : 0f, cameraYaw = Cleverous.Prodigy.ProdigyCamera.Instance != null ? Cleverous.Prodigy.ProdigyCamera.Instance.transform.eulerAngles.y : 0f,
+            localWeaponParticles = WeaponParticles(player), replicaWeaponParticles = WeaponParticles(actor), partyQuests = SingletonBehaviour<QuestManager>.InstanceExists() && Quests.HasLoaded && SideQuests.TryGetValue(QuestRealm, out var side) ? string.Join("\n", side.Where(q => q != null && q.Status != Quest.QuestStatus.None).Select(QuestTitle)) : "", dropsSent = dropsSent, bagItems = player != null ? player.inventory.Count : 0,
+            openChests = Object.FindObjectsOfType<ContainerInteractable>().Count(c => c.IsOpen), brokenBarrels = Object.FindObjectsOfType<ContainerDestroyable>().Count(b => b.IsDestroyed), primaryHp = player != null ? player.hp : 0f, primaryExperience = player != null ? (long)player.experience : 0,
+            primaryOnNavMesh = player != null && player.GetComponent<NavMeshAgent>() != null && player.GetComponent<NavMeshAgent>().isOnNavMesh,
+            gameScene = SceneLoad.CurrentScene.ToString(), followPrompt = followAnswer != null, inCombat = InCombat, partnerElsewhere = PartnersElsewhere().Any(), downed = downed, replicaDown = partner != null && partner.Down, reviveProgress = reviveProgress, chatReceived = chatReceived, lastChat = chatLines.Count > 0 ? chatLines[chatLines.Count - 1].line : "", fateChoice = SingletonBehaviour<FateChoiceUI>.InstanceExists() && FateChoiceUI.FateChoiceActive,
+            prototypeActors = partners.Values.Count(p => p.Actor != null)
         };
         var json = JsonUtility.ToJson(telemetry);
         File.WriteAllText(Path.Combine(controlRoot, "status.json"), json);
         File.AppendAllText(Path.Combine(controlRoot, "telemetry.jsonl"), json + Environment.NewLine);
     }
 
-    [Serializable] private sealed class RouteResult
-    {
-        public float guestTravel, primaryTravel;
-        public bool primaryIdentityPreserved;
-        public int aiCallsSuppressed;
-    }
     [Serializable] private sealed class Telemetry
     {
-        public float time;
-        public string scene = "", status = "", campaign = "", gameScene = "", layoutHash = "", worldKey = "", sessionRole = "";
-        public int primaryId, guestId, spawnedTotal, aiCallsSuppressed, prototypeActors, renderers, activeMeshes, meshesSeenByCamera, worldEpoch, dungeonDepth, networkAccepted, networkRejected, localPort;
-        public Vector3 primaryPosition, guestPosition, guestVelocity;
-        public bool guestOnNavMesh, guestWalking, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, sharedSession, followPrompt, inCombat, partnerElsewhere, downed, replicaDown, fateChoice;
-        public float reviveProgress;
-        public int chatReceived;
-        public string lastChat = "";
-        public string localPetJson = "";
-        public int remotePetId, remotePetActors, localPetCount, remotePetMeshes;
-        public Vector3 remotePetPosition;
-        public string remotePetModel = "";
-        public string remoteName = "", aggro = "", partyQuests = "", remoteEffects = "";
+        public float time, reviveProgress, primaryHp, cameraZoom, cameraYaw;
+        public string scene = "", status = "", campaign = "", gameScene = "", layoutHash = "", worldKey = "", sessionRole = "", lastChat = "", remotePetModel = "", remoteName = "", aggro = "", partyQuests = "", remoteEffects = "";
+        public int primaryId, guestId, spawnedTotal, aiCallsSuppressed, prototypeActors, worldEpoch, dungeonDepth, networkAccepted, networkRejected, localPort, myId, worldOwner, partnerCount, partnersInWorld, chatReceived;
+        public Vector3 primaryPosition, guestPosition, remotePetPosition;
+        public bool guestOnNavMesh, guestWalking, guestRunning, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, ownsWorld, followPrompt, inCombat, partnerElsewhere, downed, replicaDown, fateChoice;
+        public int remotePetActors, localPetCount;
         public int monstersTracked, worldMonsters, trackedHp, trackedDead, hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, swingsPlayed, castsPlayed, groundItems, lootGiven, lootTaken, questRewardsSent, questRewardsTaken, effectsSent, effectsTaken, damagePopups, spellsReplayed, arrowsDrawn, levelUpsPlayed, mirrorEffects, replicaFishing, localFishing, localWeaponParticles, replicaWeaponParticles, dropsSent, bagItems, openChests, brokenBarrels;
-        public float primaryHp, cameraZoom, cameraYaw;
         public long primaryExperience;
     }
 }

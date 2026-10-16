@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using HarmonyLib;
 using Steamworks;
@@ -9,34 +11,40 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.16.0";
+    internal const string Version = "0.17.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
-    private const float FrameInterval = 0.05f, PeerTimeout = 10f;
+    internal const int HostId = 0;
+    private const int Everyone = -1, Unassigned = -2;
+    private const float FrameInterval = 0.05f, AwayFrameInterval = 0.5f, PeerTimeout = 10f;
     private IPeerLink? link;
-    private bool isHost = true, peerConnected;
-    private float lastPeerMessage = float.NegativeInfinity, nextFrame;
-    private PeerFrame? remoteFrame;
+    private bool isHost = true;
+    private int myId = HostId;
+    private readonly SortedDictionary<int, Partner> partners = new SortedDictionary<int, Partner>();
+    private readonly Dictionary<(int from, int to), float> awayRelays = new Dictionary<(int, int), float>();
+    private float nextFrame, lastHostMessage;
     private int frameSeq;
-    private string requestedWorld = "";
     private ulong commandLineLobby;
     private Callback<GameLobbyJoinRequested_t>? lobbyInvites;
     private Callback<GameRichPresenceJoinRequested_t>? presenceJoins;
 
     [Serializable] private sealed class Envelope
     {
-        public string version = "", type = "", body = "";
+        public string version = "", type = "", body = "", world = "";
+        public int from, to = Everyone;
     }
     [Serializable] private sealed class PeerFrame
     {
         public string worldKey = "", scene = "";
         public Vector3 primaryPosition = Vector3.zero;
         public float primaryYaw = 0, swingSpeed = 0, xpPercent = 0, time = 0, revive = 0;
-        public int seq;
+        public int seq, owner, reviveTarget = Unassigned;
         public int swings, casts, hp, maxHp, mana, maxMana, level, depth, fishing, arrows, levelUps, spells, spellTarget;
-        public Vector3 arrowEnd, spellAim;
-        public string petJson = "", castSpell = "", effects = "", spellName = "";
+        public bool running;
+        public Vector3 arrowEnd, spellAim, portalPosition;
+        public string petJson = "", castSpell = "", effects = "", spellName = "", portalWorld = "";
     }
 
+    private bool Connected => partners.Count > 0;
     internal static string Compatibility => Version + "/" + Application.version;
     private static bool SteamReady => AccessTools.StaticFieldRefAccess<SteamManager, bool>("s_EverInitialized");
 
@@ -51,8 +59,11 @@ public sealed partial class Plugin
         EndSession("");
         link = next;
         isHost = host;
+        myId = host ? HostId : Unassigned;
+        lastHostMessage = Time.unscaledTime;
         nextFrame = 0;
         autoContinued = false;
+        worldOwner = myId;
     }
 
     private void JoinSteam(CSteamID lobby)
@@ -75,181 +86,207 @@ public sealed partial class Plugin
         }
         if (link == null) return;
         if (link.CloseReason.Length > 0) { EndSession(link.CloseReason); return; }
-        while (link != null && link.TryReceive(out var message)) Receive(message);
+        while (link != null && link.TryReceive(out var peer, out var message)) Receive(peer, message);
         if (link == null) return;
-        var connected = Time.unscaledTime - lastPeerMessage < PeerTimeout;
-        if (connected != peerConnected)
-        {
-            peerConnected = connected;
-            if (connected)
-            {
-                sharedSession = true;
-                sentProfileKey = "";
-                sentQuests = "";
-                Fate.SetPause(false);
-                if (isHost) Send("resync", "");
-                SetStatus("Co-op partner connected.");
-            }
-            else { DropPeer(); Notify("Your co-op partner stopped responding."); }
-        }
+        if (!isHost && Time.unscaledTime - lastHostMessage > PeerTimeout) { EndSession("The host stopped responding."); return; }
+        foreach (var gone in partners.Values.Where(p => Time.unscaledTime - p.LastMessage > PeerTimeout).ToList()) DropPartner(gone, " stopped responding.");
         if (Time.unscaledTime >= nextFrame)
         {
-            nextFrame = Time.unscaledTime + FrameInterval;
+            nextFrame = Time.unscaledTime + (WorldPartners().Any() ? FrameInterval : AwayFrameInterval);
             Send("frame", JsonUtility.ToJson(LocalFrame()), reliable: false);
         }
-        if (!peerConnected) return;
+        if (!Connected) return;
         SendProfileIfChanged();
-        if (isHost) { SyncMonsters(); SyncGround(); SyncQuests(); }
-        else if (remoteFrame != null) FollowHost(remoteFrame);
+        UpdateOwnership();
+        if (OwnsWorld) { SyncMonsters(); SyncGround(); }
+        SyncQuests();
         TrackPartnerTravel();
         UpdateRevive();
     }
 
     private PeerFrame LocalFrame()
     {
-        var host = Player.PlayerChar;
+        var player = Player.PlayerChar;
+        TrackLocalPortal();
         return new PeerFrame
         {
             seq = ++frameSeq, time = Time.unscaledTime,
-            worldKey = SharedWorldReady() ? CurrentWorldKey() : "", scene = SceneLoad.CurrentScene.ToString(),
-            primaryPosition = host != null ? host.transform.position : Vector3.zero, primaryYaw = host != null ? host.transform.eulerAngles.y : 0f,
-            hp = host != null ? host.HP() : 0, maxHp = host != null ? host.MaxHP() : 0, mana = host != null ? host.Mana() : 0, maxMana = host != null ? host.MaxMana() : 0,
-            level = host != null ? host.Level : 0, xpPercent = host != null ? host.GetPctToNextLevel() : 0f, depth = LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth() : 0,
+            worldKey = SharedWorldReady() ? CurrentWorldKey() : "", owner = worldOwner, scene = SceneLoad.CurrentScene.ToString(),
+            primaryPosition = player != null ? player.transform.position : Vector3.zero, primaryYaw = player != null ? player.transform.eulerAngles.y : 0f, running = LocalRunning(),
+            hp = player != null ? player.HP() : 0, maxHp = player != null ? player.MaxHP() : 0, mana = player != null ? player.Mana() : 0, maxMana = player != null ? player.MaxMana() : 0,
+            level = player != null ? player.Level : 0, xpPercent = player != null ? player.GetPctToNextLevel() : 0f, depth = LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth() : 0,
             petJson = JsonUtility.ToJson(LocalPetSnapshot()), swings = localSwings, swingSpeed = localSwingSpeed, casts = localCasts, castSpell = localCastSpell,
-            effects = host != null ? ActiveEffectNames(host) : "", fishing = LocalFishing(), arrows = localArrows, arrowEnd = localArrowEnd, levelUps = CountLevelUps(),
-            spells = localSpells, spellName = localSpellName, spellAim = localSpellAim, spellTarget = localSpellTarget, revive = reviveProgress
+            effects = player != null ? ActiveEffectNames(player) : "", fishing = LocalFishing(), arrows = localArrows, arrowEnd = localArrowEnd, levelUps = CountLevelUps(),
+            spells = localSpells, spellName = localSpellName, spellAim = localSpellAim, spellTarget = localSpellTarget, revive = reviveProgress, reviveTarget = reviveTarget, portalWorld = localPortalWorld, portalPosition = localPortalPosition
         };
     }
 
-    private void Send(string type, string body, bool reliable = true)
+    private void Send(string type, string body, int to = Everyone, bool reliable = true, bool worldScoped = false)
     {
-        var bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(new Envelope { version = Compatibility, type = type, body = body }));
-        if (bytes.Length > MaxMessageBytes) { Logger.LogError($"PEER_MESSAGE_TOO_LARGE type={type} bytes={bytes.Length}"); return; }
-        link!.Send(bytes, reliable);
+        var envelope = new Envelope { version = Compatibility, type = type, body = body, from = myId, to = to, world = worldScoped ? CurrentWorldKey() : "" };
+        if (isHost) Deliver(envelope, reliable);
+        else Transmit(HostId, envelope, reliable);
     }
 
-    private void Receive(byte[] bytes)
+    private void SendWorld(string type, string body) => Send(type, body, worldScoped: true);
+
+    private void SendToOwner(string type, string body) => Send(type, body, worldOwner, worldScoped: true);
+
+    private void Transmit(int peer, Envelope envelope, bool reliable)
+    {
+        var bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(envelope));
+        if (bytes.Length > MaxMessageBytes) { Logger.LogError($"PEER_MESSAGE_TOO_LARGE type={envelope.type} bytes={bytes.Length}"); return; }
+        link!.Send(peer, bytes, reliable);
+    }
+
+    private void Deliver(Envelope envelope, bool reliable)
+    {
+        var sender = envelope.from == myId ? LocalFrameWorld() : partners.TryGetValue(envelope.from, out var origin) ? origin.Frame?.worldKey ?? "" : "";
+        foreach (var target in partners.Values)
+        {
+            if (target.Id == envelope.from || (envelope.to != Everyone && envelope.to != target.Id)) continue;
+            if (envelope.type == "frame" && !(sender.Length > 0 && target.Frame?.worldKey == sender))
+            {
+                var key = (envelope.from, target.Id);
+                if (awayRelays.TryGetValue(key, out var next) && Time.unscaledTime < next) continue;
+                awayRelays[key] = Time.unscaledTime + AwayFrameInterval;
+            }
+            Transmit(target.Id, envelope, reliable);
+        }
+    }
+
+    private string LocalFrameWorld() => SharedWorldReady() ? CurrentWorldKey() : "";
+
+    private void Receive(int peer, byte[] bytes)
     {
         var envelope = JsonUtility.FromJson<Envelope>(Encoding.UTF8.GetString(bytes));
         if (envelope == null || envelope.version != Compatibility)
         {
-            EndSession("Your partner runs a different mod or game version (" + envelope?.version + ", this game runs " + Compatibility + ").");
+            if (!isHost) { EndSession("Your friends run a different mod or game version (" + envelope?.version + ", this game runs " + Compatibility + ")."); return; }
+            Transmit(peer, new Envelope { version = Compatibility, type = "mismatch" }, true);
             return;
         }
-        lastPeerMessage = Time.unscaledTime;
-        try
+        if (isHost)
         {
-            switch (envelope.type)
-            {
-                case "frame": ReceiveFrame(JsonUtility.FromJson<PeerFrame>(envelope.body)); break;
-                case "world-request":
-                    if (!isHost || SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || !SharedWorldReady()) break;
-                    monsterStates.Clear();
-                    announcedGround.Clear();
-                    announcedFixtures.Clear();
-                    Send("world", JsonUtility.ToJson(ExportWorld()));
-                    break;
-                case "resync":
-                    if (isHost) throw new InvalidOperationException("Only the host asks for a resync.");
-                    ForgetHostWorld();
-                    break;
-                case "world":
-                    if (isHost) throw new InvalidOperationException("Only the host sends dungeon floors.");
-                    if (transitioning) { requestedWorld = ""; break; }
-                    JoinWorld(JsonUtility.FromJson<WorldSnapshot>(envelope.body));
-                    break;
-                case "profile": ReceiveProfile(envelope.body); break;
-                case "monsters": ReceiveMonsters(envelope.body); break;
-                case "hit": ApplyHit(envelope.body); break;
-                case "strike": TakeStrike(envelope.body); break;
-                case "hurt": TakeHurt(envelope.body); break;
-                case "effect": TakeEffect(envelope.body); break;
-                case "kill": TakeKill(envelope.body); break;
-                case "pop": ShowDamagePopup(envelope.body); break;
-                case "ground": ReceiveGround(envelope.body); break;
-                case "ground-gone": ReceiveGroundGone(envelope.body); break;
-                case "ground-list": CheckGroundList(envelope.body); break;
-                case "ground-missing": ResendGround(envelope.body); break;
-                case "take": GiveTake(envelope.body); break;
-                case "granted": ReceiveGranted(envelope.body); break;
-                case "drop": ReceiveDrop(envelope.body); break;
-                case "use-fixture": UseFixture(envelope.body); break;
-                case "fixture": ApplyFixture(envelope.body); break;
-                case "quests": ReceiveQuests(envelope.body); break;
-                case "quest-reward": TakeQuestReward(envelope.body); break;
-                case "use-ward": UseWard(envelope.body); break;
-                case "revive": if (downed) StandUp(); break;
-                case "chat": ReceiveChat(envelope.body); break;
-                default: throw new InvalidOperationException("Unknown peer message: " + envelope.type);
-            }
+            envelope.from = peer;
+            if (!partners.ContainsKey(peer)) Welcome(peer);
+            if (envelope.to != HostId) Deliver(envelope, envelope.type != "frame");
+            if (envelope.to != HostId && envelope.to != Everyone) { partners[peer].LastMessage = Time.unscaledTime; return; }
         }
+        else lastHostMessage = Time.unscaledTime;
+        if (envelope.type == "welcome")
+        {
+            if (worldOwner == myId) worldOwner = int.Parse(envelope.body);
+            myId = int.Parse(envelope.body);
+            return;
+        }
+        if (envelope.type == "left") { if (partners.TryGetValue(int.Parse(envelope.body), out var left)) DropPartner(left, " left."); return; }
+        if (envelope.from == myId) return;
+        var partner = PartnerFor(envelope.from);
+        partner.LastMessage = Time.unscaledTime;
+        if (envelope.world.Length > 0 && envelope.world != CurrentWorldKey()) return;
+        try { Handle(partner, envelope); }
         catch (Exception e)
         {
             networkRejected++;
-            Logger.LogWarning("PEER_MESSAGE_REJECTED " + envelope.type + ": " + e.Message);
+            Logger.LogWarning("PEER_MESSAGE_REJECTED " + envelope.type + " from " + envelope.from + ": " + e.Message);
         }
     }
 
-    private void ReceiveFrame(PeerFrame frame)
+    private void Handle(Partner partner, Envelope envelope)
+    {
+        switch (envelope.type)
+        {
+            case "frame": ReceiveFrame(partner, JsonUtility.FromJson<PeerFrame>(envelope.body)); break;
+            case "profile": ReceiveProfile(partner, envelope.body); break;
+            case "world-request": SendWorldTo(partner, envelope.body); break;
+            case "world": ReceiveWorld(partner, envelope.body); break;
+            case "monsters": ReceiveMonsters(envelope.body); break;
+            case "hit": ApplyHit(partner, envelope.body); break;
+            case "strike": TakeStrike(envelope.body); break;
+            case "hurt": TakeHurt(partner, envelope.body); break;
+            case "effect": TakeEffect(partner, envelope.body); break;
+            case "kill": TakeKill(envelope.body); break;
+            case "pop": ShowDamagePopup(envelope.body); break;
+            case "ground": ReceiveGround(envelope.body); break;
+            case "ground-gone": ReceiveGroundGone(envelope.body); break;
+            case "ground-list": CheckGroundList(envelope.body); break;
+            case "ground-missing": ResendGround(envelope.body); break;
+            case "take": GiveTake(partner, envelope.body); break;
+            case "granted": ReceiveGranted(envelope.body); break;
+            case "drop": ReceiveDrop(envelope.body); break;
+            case "use-fixture": UseFixture(envelope.body); break;
+            case "fixture": ApplyFixture(envelope.body); break;
+            case "quests": ReceiveQuests(envelope.body); break;
+            case "quest-progress": MergeProgress(envelope.body); break;
+            case "quest-accept": TakeQuestAccept(envelope.body); break;
+            case "quest-cancel": TakeQuestCancel(envelope.body); break;
+            case "quest-claim": TakeQuestClaim(partner, envelope.body); break;
+            case "quest-reward": TakeQuestReward(envelope.body); break;
+            case "use-ward": UseWard(envelope.body); break;
+            case "revive": if (downed) StandUp(partner); break;
+            case "chat": ReceiveChat(partner, envelope.body); break;
+            case "mismatch": EndSession("Your friends run a different mod or game version (this game runs " + Compatibility + ")."); break;
+            default: throw new InvalidOperationException("Unknown peer message: " + envelope.type);
+        }
+    }
+
+    private void Welcome(int peer)
+    {
+        Transmit(peer, new Envelope { version = Compatibility, type = "welcome", body = peer.ToString(), from = HostId, to = peer }, true);
+        PartnerFor(peer);
+        sentProfileKey = "";
+        sentQuests = "";
+        Fate.SetPause(false);
+    }
+
+    private Partner PartnerFor(int id)
+    {
+        if (partners.TryGetValue(id, out var partner)) return partner;
+        partner = new Partner(id) { LastMessage = Time.unscaledTime };
+        partners[id] = partner;
+        sentProfileKey = "";
+        return partner;
+    }
+
+    private void ReceiveFrame(Partner partner, PeerFrame frame)
     {
         if (frame == null) throw new InvalidOperationException("Empty peer frame.");
-        if (remoteFrame != null && frame.seq <= remoteFrame.seq) return;
-        remoteFrame = frame;
-        SyncClock(frame.time);
-        if (frame.worldKey.Length > 0 && frame.worldKey == CurrentWorldKey() && SharedWorldReady())
+        if (partner.Frame != null && frame.seq <= partner.Frame.seq) return;
+        partner.Frame = frame;
+        partner.SyncClock(frame.time);
+        ShowPartnerPortal(partner);
+        if (partner.InWorld(LocalFrameWorld()))
         {
-            ApplyPeerFrame(frame);
+            ApplyPeerFrame(partner, frame);
             networkAccepted++;
         }
-        else if (actor != null && !transitioning) Despawn();
+        else if (partner.Actor != null && !transitioning) Despawn(partner);
     }
 
-    private void FollowHost(PeerFrame host)
+    private void DropPartner(Partner partner, string reason)
     {
-        if (transitioning || Player.PlayerChar == null || host.worldKey.Length == 0 || host.worldKey == CurrentWorldKey()) return;
-        if (loadedWorldKey.Length > 0)
-        {
-            ForgetHostWorld();
-            return;
-        }
-        if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || PartnerPlace(host) != LocalPlace() || host.worldKey == requestedWorld) return;
-        requestedWorld = host.worldKey;
-        Send("world-request", "");
-        Logger.LogInfo("REQUESTED_HOST_FLOOR " + host.worldKey);
-    }
-
-    private void ForgetHostWorld()
-    {
-        loadedWorldKey = "";
-        requestedWorld = "";
-        ResetMonsters();
-        ResetGround();
-    }
-
-    private void DropPeer()
-    {
-        if (downed) DieForReal();
-        Despawn();
-        LeaveSharedWorld();
-        if (!isHost) loadedWorldKey = "";
-        remoteFrame = null;
-        clockSynced = false;
-        remoteProfileJson = "";
-        partnerName = "";
-        partyQuests = "";
-        requestedWorld = "";
-        ResetTravel();
+        if (!partners.Remove(partner.Id)) return;
+        Despawn(partner);
+        if (partner.Portal != null) UnityEngine.Object.Destroy(partner.Portal);
+        partner.DestroyHud();
+        if (isHost) Send("left", partner.Id.ToString());
+        if (partner.Name.Length > 0) Notify(partner.Name + reason);
     }
 
     private void EndSession(string reason)
     {
         if (link == null) return;
+        if (downed) DieForReal();
+        foreach (var partner in partners.Values.ToList()) DropPartner(partner, "");
+        if (!OwnsWorld) TakeOwnership();
         link.Dispose();
         link = null;
-        if (peerConnected) DropPeer();
-        peerConnected = false;
         isHost = true;
-        lastPeerMessage = float.NegativeInfinity;
+        myId = worldOwner = HostId;
+        awayRelays.Clear();
+        RestoreOwnQuests();
+        ResetTravel();
         if (reason.Length > 0) Notify(reason);
     }
 }

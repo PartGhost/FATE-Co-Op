@@ -16,8 +16,7 @@ function Wait-Pair([scriptblock]$Condition, [string]$What, [int]$Seconds = 20) {
 }
 
 $start = State a
-if ($start.gameScene -eq 'Town_Grove') { Send 'enter-dungeon' }
-if ((State b).gameScene -eq 'Town_Grove') { Send 'enter-dungeon' 'b' }
+& (Join-Path $PSScriptRoot 'Enter-HostDungeon.ps1') | Out-Null
 $paired = Wait-Pair { param($a, $b) $a.dungeonDepth -ge 1 -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $a.guestId -ne 0 -and $b.guestId -ne 0 } 'Shared floor' 90
 Send 'test-resume' 'a'
 Send 'test-resume' 'b'

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Steamworks;
 
@@ -17,7 +18,10 @@ internal sealed class SteamLink : IPeerLink
     private readonly Callback<LobbyChatUpdate_t> membersChanged;
     private readonly Callback<SteamNetworkingMessagesSessionRequest_t> sessionRequested;
     private readonly IntPtr[] incoming = new IntPtr[1];
-    private CSteamID lobby = CSteamID.Nil, peer = CSteamID.Nil;
+    private readonly Dictionary<int, CSteamID> users = new Dictionary<int, CSteamID>();
+    private readonly Dictionary<CSteamID, int> ids = new Dictionary<CSteamID, int>();
+    private CSteamID lobby = CSteamID.Nil;
+    private int nextPeer = Plugin.HostId + 1;
     private string failure = "";
 
     private SteamLink(bool host, Action<string> report)
@@ -30,10 +34,10 @@ internal sealed class SteamLink : IPeerLink
         sessionRequested = Callback<SteamNetworkingMessagesSessionRequest_t>.Create(OnSessionRequested);
     }
 
-    internal static SteamLink Host(Action<string> report)
+    internal static SteamLink Host(int players, Action<string> report)
     {
         var link = new SteamLink(true, report);
-        link.created.Set(SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, 2));
+        link.created.Set(SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, players));
         report("Creating Steam lobby...");
         return link;
     }
@@ -57,7 +61,7 @@ internal sealed class SteamLink : IPeerLink
         lobby = new CSteamID(result.m_ulSteamIDLobby);
         SteamMatchmaking.SetLobbyData(lobby, VersionKey, Plugin.Compatibility);
         SteamFriends.SetRichPresence("connect", "+connect_lobby " + lobby.m_SteamID);
-        report("Steam lobby ready. Invite a friend with Shift+Tab or the Invite button.");
+        report("Steam lobby ready. Invite friends with Shift+Tab or Invite friend in the Escape menu.");
     }
 
     private void OnLobbyEntered(LobbyEnter_t result, bool ioFailure)
@@ -67,8 +71,8 @@ internal sealed class SteamLink : IPeerLink
         if (ioFailure || result.m_EChatRoomEnterResponse != (uint)EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess) { failure = "Could not join the Steam lobby: " + (EChatRoomEnterResponse)result.m_EChatRoomEnterResponse; return; }
         var version = SteamMatchmaking.GetLobbyData(lobby, VersionKey);
         if (version != Plugin.Compatibility) { failure = "The host runs " + version + ", this game runs " + Plugin.Compatibility + "."; return; }
-        peer = SteamMatchmaking.GetLobbyOwner(lobby);
-        report("Joined " + SteamFriends.GetFriendPersonaName(peer) + "'s lobby.");
+        Add(Plugin.HostId, SteamMatchmaking.GetLobbyOwner(lobby));
+        report("Joined " + SteamFriends.GetFriendPersonaName(users[Plugin.HostId]) + "'s lobby.");
     }
 
     private void OnMembersChanged(LobbyChatUpdate_t change)
@@ -77,26 +81,32 @@ internal sealed class SteamLink : IPeerLink
         var user = new CSteamID(change.m_ulSteamIDUserChanged);
         if ((change.m_rgfChatMemberStateChange & (uint)EChatMemberStateChange.k_EChatMemberStateChangeEntered) != 0)
         {
-            if (host && !peer.IsValid()) { peer = user; report(SteamFriends.GetFriendPersonaName(user) + " joined the lobby."); }
+            if (host && !ids.ContainsKey(user)) Add(nextPeer++, user);
             return;
         }
-        if (user != peer) return;
-        CloseSession();
-        peer = CSteamID.Nil;
-        if (host) report("Your friend left the lobby. Invite them again to continue.");
-        else failure = "The host closed the lobby.";
+        if (!ids.TryGetValue(user, out var peer)) return;
+        CloseSession(user);
+        users.Remove(peer);
+        ids.Remove(user);
+        if (!host) failure = "The host closed the lobby.";
+    }
+
+    private void Add(int peer, CSteamID user)
+    {
+        users[peer] = user;
+        ids[user] = peer;
     }
 
     private void OnSessionRequested(SteamNetworkingMessagesSessionRequest_t request)
     {
         var remote = request.m_identityRemote;
-        if (peer.IsValid() && remote.GetSteamID() == peer) SteamNetworkingMessages.AcceptSessionWithUser(ref remote);
+        if (ids.ContainsKey(remote.GetSteamID())) SteamNetworkingMessages.AcceptSessionWithUser(ref remote);
     }
 
-    public void Send(byte[] message, bool reliable)
+    public void Send(int peer, byte[] message, bool reliable)
     {
-        if (!peer.IsValid()) return;
-        var identity = Identity(peer);
+        if (!users.TryGetValue(peer, out var user)) return;
+        var identity = Identity(user);
         var data = Marshal.AllocHGlobal(message.Length);
         try
         {
@@ -106,15 +116,16 @@ internal sealed class SteamLink : IPeerLink
         finally { Marshal.FreeHGlobal(data); }
     }
 
-    public bool TryReceive(out byte[] message)
+    public bool TryReceive(out int peer, out byte[] message)
     {
+        peer = 0;
         message = Array.Empty<byte>();
         while (SteamNetworkingMessages.ReceiveMessagesOnChannel(Channel, incoming, 1) == 1)
         {
             var received = SteamNetworkingMessage_t.FromIntPtr(incoming[0]);
             try
             {
-                if (received.m_identityPeer.GetSteamID() != peer || received.m_cbSize <= 0 || received.m_cbSize > Plugin.MaxMessageBytes) continue;
+                if (!ids.TryGetValue(received.m_identityPeer.GetSteamID(), out peer) || received.m_cbSize <= 0 || received.m_cbSize > Plugin.MaxMessageBytes) continue;
                 message = new byte[received.m_cbSize];
                 Marshal.Copy(received.m_pData, message, 0, received.m_cbSize);
                 return true;
@@ -131,16 +142,15 @@ internal sealed class SteamLink : IPeerLink
         return identity;
     }
 
-    private void CloseSession()
+    private static void CloseSession(CSteamID user)
     {
-        if (!peer.IsValid()) return;
-        var identity = Identity(peer);
+        var identity = Identity(user);
         SteamNetworkingMessages.CloseSessionWithUser(ref identity);
     }
 
     public void Dispose()
     {
-        CloseSession();
+        foreach (var user in users.Values) CloseSession(user);
         if (lobby.IsValid()) SteamMatchmaking.LeaveLobby(lobby);
         if (host) SteamFriends.ClearRichPresence();
         created.Dispose();

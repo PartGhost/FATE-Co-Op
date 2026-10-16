@@ -6,26 +6,65 @@ using Steamworks;
 using Tableflip;
 using UnityEngine;
 using UnityEngine.AI;
+using Object = UnityEngine.Object;
 
 namespace FateCoop.Prototype;
+
 public sealed partial class Plugin
 {
-    private Character? remotePet;
-    private string remotePetModel = "";
     private const float InterpolationDelay = 0.12f;
-    private readonly PoseTrail partnerTrail = new PoseTrail(), petTrail = new PoseTrail();
-    private float clockOffset;
-    private bool clockSynced;
-    private string remoteProfileJson = "", sentProfileKey = "", partnerName = "";
+    private const string PlayerMarker = "P_Marker_Player";
+    private static readonly AccessTools.FieldRef<Character, AIState> AIStateRef = AccessTools.FieldRefAccess<Character, AIState>("eAIState");
+    private string sentProfileKey = "", localCastSpell = "";
     private float nextProfileCheck, localSwingSpeed;
-    private int localSwings, localCasts, remoteSwings = -1, remoteCasts = -1, swingsPlayed, castsPlayed, remoteHp, remoteMaxHp, remoteMana, remoteMaxMana;
-    private string localCastSpell = "";
+    private int localSwings, localCasts, spawnCount, suppressedAI, swingsPlayed, castsPlayed;
+
+    private sealed class Partner
+    {
+        internal readonly int Id;
+        internal string Name = "", ProfileJson = "", SlotPetModel = "";
+        internal PeerFrame? Frame;
+        internal float LastMessage, ClockOffset;
+        internal bool ClockSynced, Down;
+        internal PartyMember? Actor;
+        internal Character? Pet;
+        internal string PetModel = "";
+        internal readonly PoseTrail Trail = new PoseTrail(), PetTrail = new PoseTrail();
+        internal int Swings = -1, Casts = -1, Arrows = -1, LevelUps = -1, Spells = -1, Fishing;
+        internal FishingPole? Pole;
+        internal LineRenderer? ArrowLine;
+        internal GameObject? Portal;
+        internal PartyCharacterUI? Slot, PetSlot;
+        internal Texture? Portrait;
+
+        internal Partner(int id) { Id = id; }
+
+        internal float RenderTime => Time.unscaledTime + ClockOffset - InterpolationDelay;
+
+        internal bool InWorld(string key) => key.Length > 0 && Frame != null && Frame.worldKey == key;
+
+        internal void SyncClock(float senderTime)
+        {
+            var sample = senderTime - Time.unscaledTime;
+            ClockOffset = !ClockSynced ? sample : Mathf.Lerp(ClockOffset, sample, sample > ClockOffset ? 0.5f : 0.02f);
+            ClockSynced = true;
+        }
+
+        internal void DestroyHud()
+        {
+            if (Slot != null) Object.Destroy(Slot.gameObject);
+            if (PetSlot != null) Object.Destroy(PetSlot.gameObject);
+            Slot = PetSlot = null;
+        }
+    }
+
     [Serializable] private sealed class Profile
     {
         public string name = "";
         public PlayerSaveData player = null!;
         public List<ItemSaveData> equipment = new List<ItemSaveData>();
     }
+
     [Serializable] public sealed class PetSnapshot
     {
         public bool present;
@@ -34,39 +73,60 @@ public sealed partial class Plugin
         public float yaw;
         public int hp, maxHp;
     }
+
     private void InstallEntityHooks()
     {
         harmony!.Patch(AccessTools.Method(typeof(Pet), "UpdateAI"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePetAI)));
+        harmony.Patch(AccessTools.Method(typeof(PartyMember), "UpdateAI"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePartyAI)));
+        harmony.Patch(AccessTools.Method(typeof(PartyMember), "RecoverFromPassOut"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePartyAI)));
     }
-    private static bool BeforePetAI(Pet __instance) => Active == null || Active.remotePet != __instance;
+
+    private static bool BeforePetAI(Pet __instance) => Active == null || Active.PartnerOfPet(__instance) == null;
+
+    private static bool BeforePartyAI(PartyMember __instance)
+    {
+        if (Active == null || Active.PartnerOf(__instance) == null) return true;
+        Active.suppressedAI++;
+        return false;
+    }
+
+    private Partner? PartnerOf(Character? character) => character == null ? null : partners.Values.FirstOrDefault(p => p.Actor == character);
+
+    private Partner? PartnerOfPet(Character? character) => character == null ? null : partners.Values.FirstOrDefault(p => p.Pet == character);
+
+    private bool IsStandIn(Character? character) => PartnerOf(character) != null || PartnerOfPet(character) != null;
+
+    private static bool LocalRunning() => Player.PlayerChar != null && Player.PlayerChar.Running();
+
     private PetSnapshot LocalPetSnapshot()
     {
         var pet = Player.PlayerChar != null ? Player.PlayerChar.GetPet() : null;
         if (pet == null || !pet.gameObject.activeInHierarchy || pet.monsterData == null) return new PetSnapshot();
         return new PetSnapshot { present = true, model = pet.monsterData.displayName, name = pet.CharacterName ?? "Pet", position = pet.transform.position, yaw = pet.transform.eulerAngles.y, hp = pet.HP(), maxHp = pet.MaxHP() };
     }
-    private void ApplyPeerFrame(PeerFrame frame)
+
+    private void ApplyPeerFrame(Partner partner, PeerFrame frame)
     {
         if (!FinitePosition(frame.primaryPosition) || !Finite(frame.primaryYaw)) throw new InvalidOperationException("Invalid player pose.");
-        if (!NavMesh.SamplePosition(frame.primaryPosition, out var hit, 2f, NavMesh.AllAreas)) throw new InvalidOperationException("Remote player is outside the navigation mesh.");
-        if (actor == null)
+        if (!NavMesh.SamplePosition(frame.primaryPosition, out var hit, 2f, NavMesh.AllAreas)) throw new InvalidOperationException("Partner is outside the navigation mesh.");
+        if (partner.Actor == null)
         {
-            if (remoteProfileJson.Length == 0) return;
-            Spawn();
+            if (partner.ProfileJson.Length == 0 || transitioning) return;
+            Spawn(partner, hit.position);
+            if (partner.Actor == null) return;
         }
-        if (!mirroring) StopRoute();
-        partnerTrail.Add(frame.time, hit.position, frame.primaryYaw);
-        mirroring = true;
-        remoteHp = frame.hp; remoteMaxHp = frame.maxHp; remoteMana = frame.mana; remoteMaxMana = frame.maxMana;
-        ApplyRemotePet(JsonUtility.FromJson<PetSnapshot>(frame.petJson), frame.time);
-        if (remoteSwings >= 0 && frame.swings != remoteSwings) PlayReplicaSwing(frame.swingSpeed);
-        if (remoteCasts >= 0 && frame.casts != remoteCasts) PlayReplicaCast(frame.castSpell);
-        ShowReplicaDown(frame.hp <= 0 && frame.maxHp > 0);
-        remoteSwings = frame.swings;
-        remoteCasts = frame.casts;
-        PlayReplicaVisuals(frame);
+        partner.Trail.Add(frame.time, hit.position, frame.primaryYaw);
+        ApplyPartnerPet(partner, JsonUtility.FromJson<PetSnapshot>(frame.petJson), frame.time);
+        if (partner.Swings >= 0 && frame.swings != partner.Swings) PlayReplicaSwing(partner, frame.swingSpeed);
+        if (partner.Casts >= 0 && frame.casts != partner.Casts) PlayReplicaCast(partner, frame.castSpell);
+        partner.Swings = frame.swings;
+        partner.Casts = frame.casts;
+        ShowReplicaDown(partner, frame.hp <= 0 && frame.maxHp > 0);
+        PlayReplicaVisuals(partner, frame);
     }
+
     private static string LocalName() => SteamReady ? SteamFriends.GetPersonaName() : Player.PlayerChar.CharacterName;
+
     private void SendProfileIfChanged()
     {
         var player = Player.PlayerChar;
@@ -90,28 +150,81 @@ public sealed partial class Plugin
         Send("profile", JsonUtility.ToJson(new Profile { name = name, player = save, equipment = equipment }));
         sentProfileKey = key;
     }
-    private void ReceiveProfile(string body)
+
+    private void ReceiveProfile(Partner partner, string body)
     {
         var profile = JsonUtility.FromJson<Profile>(body);
         if (profile?.player == null || profile.name.Length == 0 || profile.name.Length > 64 || profile.equipment.Count > 20 || profile.equipment.Any(item => !Fate.IsItemSlotInEquipmentSlot(item.slotIndex)))
             throw new InvalidOperationException("Invalid partner profile.");
-        if (remoteProfileJson.Length == 0) Notify(profile.name + " joined your co-op game.");
-        remoteProfileJson = body;
-        partnerName = profile.name;
-        if (actor != null && mirroring) Despawn(preserveIntent: true);
+        if (partner.ProfileJson.Length == 0) Notify(profile.name + " joined the co-op game.");
+        partner.ProfileJson = body;
+        partner.Name = profile.name;
+        if (partner.Actor != null) Despawn(partner);
     }
+
+    private void Spawn(Partner partner, Vector3 position)
+    {
+        var player = Player.PlayerChar;
+        if (player == null || Fate.CurrentFateVer != Fate.FateVer.Original) return;
+        var profile = JsonUtility.FromJson<Profile>(partner.ProfileJson);
+        var configuration = profile.player;
+        configuration.health = Math.Max(configuration.health, 10f);
+        var spawned = Object.Instantiate(SingletonBehaviour<FateDB>.Instance.partyMemberPrefab, position, Quaternion.identity);
+        var actor = spawned.GetComponent<PartyMember>();
+        spawned.name = "FateCoop_Partner_" + partner.Id;
+        partner.Actor = actor;
+        actor.SetMasterCharacter(player);
+        actor.onProfilePictureChanged += picture => KeepPortrait(partner, picture);
+        buildingActor = true;
+        try { actor.Init(configuration, new ItemStorage { items = profile.equipment }); }
+        finally { buildingActor = false; }
+        var customization = spawned.GetComponentInChildren<CharacterCustomizationDefaults>(true);
+        if (customization != null)
+        {
+            customization.SetGender(configuration.male);
+            customization.SetRace(configuration.playerRace);
+            customization.SetHair(configuration.hairIndex);
+            customization.SetHead(configuration.headIndex);
+        }
+        var marker = player.transform.Find(PlayerMarker);
+        if (marker != null) Object.Instantiate(marker.gameObject, actor.transform, false).name = PlayerMarker;
+        actor.SetInvincible();
+        actor.SetPositionProper(position);
+        actor.SetTarget(null);
+        actor.SetAIState(AIState.Inactive);
+        actor.StopPathing();
+        spawnCount++;
+        Logger.LogInfo($"SPAWN_OK partner={partner.Id} actor={actor.GetInstanceID()} position={position}");
+    }
+
+    private void Despawn(Partner partner)
+    {
+        if (partner.Actor != null)
+        {
+            shownEffects.Remove(partner.Actor);
+            partner.Actor.gameObject.SetActive(false);
+            Object.Destroy(partner.Actor.gameObject);
+            Logger.LogInfo("DESPAWN_OK partner=" + partner.Id);
+        }
+        DespawnPartnerPet(partner);
+        partner.Actor = null;
+        partner.Trail.Clear();
+        partner.Down = false;
+        partner.Swings = partner.Casts = partner.Arrows = partner.LevelUps = partner.Spells = -1;
+        partner.Fishing = 0;
+        partner.Pole = null;
+        partner.ArrowLine = null;
+    }
+
+    private void DespawnPartners()
+    {
+        foreach (var partner in partners.Values) Despawn(partner);
+    }
+
     private static bool Finite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
     private static bool FinitePosition(Vector3 p) => Finite(p.x) && Finite(p.y) && Finite(p.z) && Math.Abs(p.x) < 2000 && Math.Abs(p.y) < 1000 && Math.Abs(p.z) < 2000;
-    private float RenderTime => Time.unscaledTime + clockOffset - InterpolationDelay;
 
-    private void SyncClock(float senderTime)
-    {
-        var sample = senderTime - Time.unscaledTime;
-        clockOffset = !clockSynced ? sample : Mathf.Lerp(clockOffset, sample, sample > clockOffset ? 0.5f : 0.02f);
-        clockSynced = true;
-    }
-
-    private static void MoveReplica(Character character, Vector3 target, float yaw, bool live)
+    private static void MoveReplica(Character character, Vector3 target, float yaw, bool live, bool running)
     {
         var agent = character.GetComponent<NavMeshAgent>();
         if (agent == null || !agent.enabled || !agent.isOnNavMesh) return;
@@ -119,48 +232,68 @@ public sealed partial class Plugin
         agent.Warp(target);
         character.transform.rotation = Quaternion.Slerp(character.transform.rotation, Quaternion.Euler(0, yaw, 0), 1f - Mathf.Exp(-20f * Time.unscaledDeltaTime));
         var animator = character.GetComponent<Animator>();
-        if (animator != null) animator.SetBool("IsWalking", live && (target - previous).sqrMagnitude > 0.0001f);
+        if (animator == null) return;
+        var moving = live && (target - previous).sqrMagnitude > 0.0001f;
+        animator.SetBool("IsWalking", moving);
+        animator.SetBool("IsRunning", moving && running);
     }
 
-    private void ApplyRemotePet(PetSnapshot pet, float time)
+    private void ApplyPartnerPet(Partner partner, PetSnapshot pet, float time)
     {
-        if (pet == null || !pet.present) { DespawnRemotePet(); return; }
+        if (pet == null || !pet.present) { DespawnPartnerPet(partner); return; }
         if (!FinitePosition(pet.position) || !Finite(pet.yaw) || pet.model.Length > 128 || pet.name.Length > 64) throw new InvalidOperationException("Invalid pet state.");
-        if (!NavMesh.SamplePosition(pet.position, out var hit, 3f, NavMesh.AllAreas)) { DespawnRemotePet(); return; }
-        if (remotePet == null || remotePetModel != pet.model)
+        if (!NavMesh.SamplePosition(pet.position, out var hit, 3f, NavMesh.AllAreas)) { DespawnPartnerPet(partner); return; }
+        if (partner.Pet == null || partner.PetModel != pet.model)
         {
-            DespawnRemotePet();
+            DespawnPartnerPet(partner);
             var data = SingletonBehaviour<FateDB>.Instance.allMonsters.FirstOrDefault(m => m != null && m.displayName == pet.model);
-            if (data == null || data.modelPrefab == null) throw new InvalidOperationException("Remote pet model is unavailable: " + pet.model);
-            var obj = UnityEngine.Object.Instantiate(data.modelPrefab, hit.position, Quaternion.Euler(0, pet.yaw, 0));
-            remotePet = obj.GetComponent<Character>();
-            if (remotePet == null) { UnityEngine.Object.Destroy(obj); throw new InvalidOperationException("Pet prefab has no Character."); }
-            obj.name = "FateCoop_Remote_Pet";
-            remotePetModel = pet.model;
-            remotePet.SetMasterCharacter(actor);
-            remotePet.monsterData = data;
-            remotePet.Init();
-            remotePet.CharacterName = pet.name;
-            remotePet.SetInvincible(true);
-            remotePet.allowDropEquipment = false; remotePet.allowDropInventory = false;
-            remotePet.SetTarget(null); remotePet.SetAIState(AIState.Inactive); remotePet.StopPathing();
+            if (data == null || data.modelPrefab == null) throw new InvalidOperationException("Partner pet model is unavailable: " + pet.model);
+            var obj = Object.Instantiate(data.modelPrefab, hit.position, Quaternion.Euler(0, pet.yaw, 0));
+            var copy = obj.GetComponent<Character>();
+            if (copy == null) { Object.Destroy(obj); throw new InvalidOperationException("Pet prefab has no Character."); }
+            obj.name = "FateCoop_Partner_Pet_" + partner.Id;
+            partner.Pet = copy;
+            partner.PetModel = pet.model;
+            copy.SetMasterCharacter(partner.Actor);
+            copy.monsterData = data;
+            copy.Init();
+            if (copy is Monster monster) monster.RemoveGroundMarker();
+            copy.CharacterName = pet.name;
+            copy.SetInvincible(true);
+            copy.allowDropEquipment = false;
+            copy.allowDropInventory = false;
+            copy.SetTarget(null);
+            copy.SetAIState(AIState.Inactive);
+            copy.StopPathing();
             foreach (var collider in obj.GetComponentsInChildren<Collider>()) collider.enabled = false;
-            remotePet.SetPositionProper(hit.position);
-            Logger.LogInfo("REMOTE_PET_SPAWNED model=" + pet.model + " localPetCount=" + Player.PlayerChar.GetPetCount());
+            copy.SetPositionProper(hit.position);
         }
-        petTrail.Add(time, hit.position, pet.yaw);
+        partner.PetTrail.Add(time, hit.position, pet.yaw);
     }
+
+    private void DespawnPartnerPet(Partner partner)
+    {
+        if (partner.Pet != null)
+        {
+            partner.Pet.gameObject.SetActive(false);
+            Object.Destroy(partner.Pet.gameObject);
+        }
+        partner.Pet = null;
+        partner.PetModel = "";
+        partner.PetTrail.Clear();
+    }
+
     private void UpdateRemoteEntities()
     {
-        if (remotePet != null && petTrail.Sample(RenderTime, out var petPosition, out var petYaw, out var petLive)) MoveReplica(remotePet, petPosition, petYaw, petLive);
+        foreach (var partner in partners.Values)
+        {
+            var running = partner.Frame != null && partner.Frame.running;
+            if (partner.Actor != null && !partner.Down && partner.Trail.Sample(partner.RenderTime, out var position, out var yaw, out var live)) MoveReplica(partner.Actor, position, yaw, live, running);
+            if (partner.Pet != null && partner.PetTrail.Sample(partner.RenderTime, out var petPosition, out var petYaw, out var petLive)) MoveReplica(partner.Pet, petPosition, petYaw, petLive, running);
+        }
         UpdateMirrors();
     }
-    private void DespawnRemotePet()
-    {
-        if (remotePet != null) { remotePet.gameObject.SetActive(false); UnityEngine.Object.Destroy(remotePet.gameObject); }
-        remotePet = null; remotePetModel = "";
-        petTrail.Clear();
-    }
+
     private static void DrawBar(Rect area, int value, int max, Color fill) => DrawFill(area, max > 0 ? (float)value / max : 0f, fill);
 
     private static void DrawFill(Rect area, float fraction, Color fill)
@@ -170,13 +303,5 @@ public sealed partial class Plugin
         GUI.color = fill;
         GUI.DrawTexture(new Rect(area.x, area.y, area.width * Mathf.Clamp01(fraction), area.height), Texture2D.whiteTexture);
         GUI.color = Color.white;
-    }
-
-    private static void DrawEntityLabel(Vector3 position, string label)
-    {
-        var p = Camera.main.WorldToScreenPoint(position + Vector3.up * 1.5f);
-        if (p.z <= 0) return;
-        var width = GUI.skin.box.CalcSize(new GUIContent(label)).x + 16f;
-        GUI.Box(new Rect(p.x - width / 2f, Screen.height - p.y - 12, width, 24), label);
     }
 }

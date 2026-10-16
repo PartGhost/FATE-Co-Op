@@ -26,8 +26,7 @@ function Invoke-HitUntil([string]$Instance, [scriptblock]$Done, [string]$What) {
 function Converged($a, $b) { $a.monstersTracked -gt 0 -and $b.monstersTracked -eq $a.monstersTracked -and [Math]::Abs($a.trackedHp - $b.trackedHp) -le 1 -and $a.trackedDead -eq $b.trackedDead }
 
 $start = State a
-if ($start.gameScene -eq 'Town_Grove') { Send 'enter-dungeon' }
-if ((State b).gameScene -eq 'Town_Grove') { Send 'enter-dungeon' 'b' }
+& (Join-Path $PSScriptRoot 'Enter-HostDungeon.ps1') | Out-Null
 $paired = Wait-Pair { param($a, $b) $a.dungeonDepth -ge 1 -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $a.guestId -ne 0 -and $b.guestId -ne 0 -and (Converged $a $b) } 'Shared floor with matching monsters' 90
 Send 'test-resume' 'a'
 Send 'test-resume' 'b'

@@ -10,6 +10,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
+    private const int MaxHudRows = 8;
     private static readonly AccessTools.FieldRef<PlayerUI, PartyUI> PartyUiRef = AccessTools.FieldRefAccess<PlayerUI, PartyUI>("partyUI");
     private static readonly AccessTools.FieldRef<PartyUI, PartyPetUI> PetSlotRef = AccessTools.FieldRefAccess<PartyUI, PartyPetUI>("petUI");
     private static readonly AccessTools.FieldRef<PartyUI, PartyMemberUI[]> AllySlotsRef = AccessTools.FieldRefAccess<PartyUI, PartyMemberUI[]>("partyMemberUIs");
@@ -18,35 +19,17 @@ public sealed partial class Plugin
     private static readonly AccessTools.FieldRef<PartyCharacterUI, TextMeshProUGUI> SlotNameRef = AccessTools.FieldRefAccess<PartyCharacterUI, TextMeshProUGUI>("nameText");
     private static readonly AccessTools.FieldRef<PartyCharacterUI, RawImage> SlotPictureRef = AccessTools.FieldRefAccess<PartyCharacterUI, RawImage>("profilePictureImage");
     private PlayerUI? hudOwner;
-    private PartyCharacterUI? partnerSlot, partnerPetSlot;
     private float nextHudSearch;
-    private string partnerPetModel = "";
 
-    private static T CloneSlot<T>(T source, Vector2 position) where T : PartyCharacterUI
+    private static T CloneSlot<T>(T source) where T : PartyCharacterUI
     {
         var clone = Object.Instantiate(source.gameObject, source.transform.parent).GetComponent<T>();
         clone.enabled = false;
         clone.navigation = new Navigation { mode = Navigation.Mode.None };
         clone.gameObject.AddComponent<CanvasGroup>().blocksRaycasts = false;
         foreach (var button in clone.GetComponentsInChildren<Button>(true)) button.enabled = false;
-        ((RectTransform)clone.transform).anchoredPosition = position;
         clone.gameObject.SetActive(false);
         return clone;
-    }
-
-    private void BuildPartnerHud()
-    {
-        if (hudOwner != null || Time.unscaledTime < nextHudSearch || Player.PlayerChar == null) return;
-        nextHudSearch = Time.unscaledTime + 1f;
-        hudOwner = Object.FindObjectOfType<PlayerUI>();
-        if (hudOwner == null) return;
-        partnerPetModel = "";
-        var party = PartyUiRef(hudOwner);
-        var allies = AllySlotsRef(party);
-        partnerSlot = CloneSlot(allies[0], ((RectTransform)allies[0].transform).anchoredPosition);
-        partnerPetSlot = CloneSlot(PetSlotRef(party), ((RectTransform)allies[1].transform).anchoredPosition);
-        ((PartyPetUI)partnerPetSlot).OnInputBehaviorChange(SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.Instance.LocalInputBehavior);
-        ManaRingRef(partnerPetSlot).fillAmount = 0f;
     }
 
     private static void FillRing(PartyCharacterUI slot, int hp, int maxHp, int mana, int maxMana)
@@ -57,30 +40,69 @@ public sealed partial class Plugin
 
     private void UpdatePartnerHud()
     {
-        BuildPartnerHud();
-        if (partnerSlot == null || partnerPetSlot == null) return;
-        var frame = remoteFrame;
-        var visible = peerConnected && frame != null && partnerName.Length > 0 && showPanel;
-        partnerSlot.gameObject.SetActive(visible);
-        if (!visible)
+        if (hudOwner == null)
         {
-            partnerPetSlot.gameObject.SetActive(false);
-            return;
+            if (Time.unscaledTime < nextHudSearch || Player.PlayerChar == null) return;
+            nextHudSearch = Time.unscaledTime + 1f;
+            hudOwner = Object.FindObjectOfType<PlayerUI>();
+            if (hudOwner == null) return;
+            foreach (var partner in partners.Values) partner.DestroyHud();
         }
-        var theirs = PartnerPlace(frame);
-        var place = frame!.hp <= 0 && frame.maxHp > 0 ? "Down" : frame.worldKey == CurrentWorldKey() && frame.worldKey.Length > 0 ? "" : theirs.Length > 0 ? DescribePlace(theirs) : "Travelling";
-        SlotNameRef(partnerSlot).text = partnerName + " <size=75%>Lv " + frame.level + "</size>" + (place.Length > 0 ? "\n<size=70%>" + place + "</size>" : "");
-        FillRing(partnerSlot, frame.hp, frame.maxHp, frame.mana, frame.maxMana);
-        if (actor != null && actor.GetProfilePicture != null) SlotPictureRef(partnerSlot).texture = actor.GetProfilePicture;
-        var pet = JsonUtility.FromJson<PetSnapshot>(frame.petJson);
-        partnerPetSlot.gameObject.SetActive(pet != null && pet.present);
-        if (pet == null || !pet.present) return;
-        SlotNameRef(partnerPetSlot).text = pet.name;
-        FillRing(partnerPetSlot, pet.hp, pet.maxHp, 0, 0);
-        if (pet.model == partnerPetModel) return;
-        partnerPetModel = pet.model;
-        var family = SingletonBehaviour<FateDB>.Instance.allMonsters.FirstOrDefault(m => m != null && m.displayName == pet.model)?.family;
-        var picture = SingletonBehaviour<FateDB>.Instance.PetProfilePictures.FirstOrDefault(p => p.family == family);
-        if (picture != null) SlotPictureRef(partnerPetSlot).texture = picture.regular;
+        UpdateProgressBar();
+        var party = PartyUiRef(hudOwner);
+        var allies = AllySlotsRef(party);
+        var origin = ((RectTransform)allies[0].transform).anchoredPosition;
+        var step = ((RectTransform)allies[1].transform).anchoredPosition - origin;
+        var gameRows = allies.Count(slot => slot.gameObject.activeSelf);
+        var row = 0;
+        var visible = partners.Values.Where(p => p.Frame != null && p.Name.Length > 0).ToList();
+        var showPets = visible.Count * 2 + gameRows <= MaxHudRows;
+        var scale = Mathf.Min(1f, (float)(MaxHudRows - gameRows) / (visible.Count * (showPets ? 2 : 1)));
+        foreach (var partner in partners.Values.Except(visible)) partner.DestroyHud();
+        foreach (var partner in visible)
+        {
+            if (partner.Slot == null)
+            {
+                partner.Slot = CloneSlot(allies[0]);
+                partner.PetSlot = CloneSlot(PetSlotRef(party));
+                ((PartyPetUI)partner.PetSlot).OnInputBehaviorChange(SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.Instance.LocalInputBehavior);
+                ManaRingRef(partner.PetSlot).fillAmount = 0f;
+                partner.SlotPetModel = "";
+            }
+            var frame = partner.Frame!;
+            Place(partner.Slot, origin + step * (gameRows + scale * row++), scale);
+            partner.Slot.gameObject.SetActive(showPanel);
+            var theirs = PartnerPlace(frame);
+            var place = PartnerDown(partner) ? "Down" : partner.InWorld(LocalFrameWorld()) ? "" : theirs.Length > 0 ? DescribePlace(theirs) : "Travelling";
+            SlotNameRef(partner.Slot).text = partner.Name + " <size=75%>Lv " + frame.level + "</size>" + (place.Length > 0 ? "\n<size=70%>" + place + "</size>" : "");
+            FillRing(partner.Slot, frame.hp, frame.maxHp, frame.mana, frame.maxMana);
+            if (partner.Portrait != null) SlotPictureRef(partner.Slot).texture = partner.Portrait;
+            var pet = JsonUtility.FromJson<PetSnapshot>(frame.petJson);
+            var petShown = showPets && showPanel && pet != null && pet.present;
+            partner.PetSlot!.gameObject.SetActive(petShown);
+            if (!petShown) continue;
+            Place(partner.PetSlot, origin + step * (gameRows + scale * row++), scale);
+            SlotNameRef(partner.PetSlot).text = pet!.name;
+            FillRing(partner.PetSlot, pet.hp, pet.maxHp, 0, 0);
+            if (pet.model == partner.SlotPetModel) continue;
+            partner.SlotPetModel = pet.model;
+            var family = SingletonBehaviour<FateDB>.Instance.allMonsters.FirstOrDefault(m => m != null && m.displayName == pet.model)?.family;
+            var picture = SingletonBehaviour<FateDB>.Instance.PetProfilePictures.FirstOrDefault(p => p.family == family);
+            if (picture != null) SlotPictureRef(partner.PetSlot).texture = picture.regular;
+        }
+    }
+
+    private static void Place(PartyCharacterUI slot, Vector2 position, float scale)
+    {
+        var rect = (RectTransform)slot.transform;
+        rect.anchoredPosition = position;
+        rect.localScale = Vector3.one * scale;
+    }
+
+    private static void KeepPortrait(Partner partner, Texture2D picture)
+    {
+        if (picture == null) return;
+        if (partner.Portrait != null) Object.Destroy(partner.Portrait);
+        partner.Portrait = Object.Instantiate(picture);
     }
 }

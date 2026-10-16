@@ -1,9 +1,12 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
 using UnityEngine.AI;
+using UnityEngine.UI;
+using Object = UnityEngine.Object;
 
 namespace FateCoop.Prototype;
 
@@ -11,12 +14,13 @@ public sealed partial class Plugin
 {
     private const float BleedOutSeconds = 30f, ReviveSeconds = 4f, ReviveRange = 3f, RevivedHealth = 0.25f;
     private static readonly MethodInfo VitalsDeadSetter = AccessTools.PropertySetter(typeof(CharacterVitals), "IsDead");
-    private bool downed, replicaDown, dyingForReal;
+    private static readonly AccessTools.FieldRef<Character, Collider> ColliderRef = AccessTools.FieldRefAccess<Character, Collider>("myCollider");
+    private bool downed, dyingForReal;
     private float downedUntil, reviveStart = -1f, reviveProgress;
-    private GUIStyle? centeredLabel;
+    private int reviveTarget = Unassigned;
+    private TargetBar? progressBar;
 
-    private GUIStyle CenteredLabel => centeredLabel ??= new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
-    private bool PartnerDown => remoteFrame != null && remoteFrame.hp <= 0 && remoteFrame.maxHp > 0;
+    private static bool PartnerDown(Partner partner) => partner.Frame != null && partner.Frame.hp <= 0 && partner.Frame.maxHp > 0;
 
     private void InstallReviveHooks()
     {
@@ -29,7 +33,7 @@ public sealed partial class Plugin
     {
         var plugin = Active;
         if (plugin == null || !plugin.downed) return true;
-        ((UnityEngine.UI.Button)AccessTools.Field(typeof(PauseUI), "resumeButton").GetValue(__instance)).onClick.Invoke();
+        ((Button)AccessTools.Field(typeof(PauseUI), "resumeButton").GetValue(__instance)).onClick.Invoke();
         plugin.DieForReal();
         return false;
     }
@@ -39,7 +43,7 @@ public sealed partial class Plugin
         var plugin = Active;
         if (plugin == null || plugin.dyingForReal || __instance.Char != Player.PlayerChar) return true;
         if (plugin.downed) return false;
-        if (!plugin.PeerInWorld() || plugin.PartnerDown) return true;
+        if (!plugin.WorldPartners().Any(p => !PartnerDown(p))) return true;
         plugin.GoDown();
         return false;
     }
@@ -57,10 +61,10 @@ public sealed partial class Plugin
         var agent = player.GetComponent<NavMeshAgent>();
         if (agent.isOnNavMesh) agent.ResetPath();
         InputBlocker.uiBlockers++;
-        Notify("You're down. " + partnerName + " can revive you.");
+        Notify("You're down. A friend can revive you.");
     }
 
-    private void StandUp()
+    private void StandUp(Partner reviver)
     {
         var player = Player.PlayerChar;
         EndDowned();
@@ -68,7 +72,7 @@ public sealed partial class Plugin
         player.MyVitals.SetHealthPct(RevivedHealth);
         player.SetAIState(AIState.Inactive);
         player.GetComponent<Animator>().SetBool("IsDead", false);
-        Notify(partnerName + " revived you.");
+        Notify(reviver.Name + " revived you.");
     }
 
     private void EndDowned()
@@ -89,43 +93,69 @@ public sealed partial class Plugin
 
     private void UpdateRevive()
     {
-        if (downed && (Time.unscaledTime > downedUntil || !PeerInWorld() || PartnerDown)) DieForReal();
+        if (downed && (Time.unscaledTime > downedUntil || !WorldPartners().Any(p => !PartnerDown(p)))) DieForReal();
         var player = Player.PlayerChar;
-        if (downed || player == null || !player.Alive() || actor == null || !PartnerDown || !PeerInWorld() || (player.transform.position - actor.transform.position).sqrMagnitude > ReviveRange * ReviveRange)
-        {
-            reviveStart = -1f;
-            reviveProgress = 0f;
-            return;
-        }
-        if (reviveStart < 0f || lastCombatTime > reviveStart) reviveStart = Time.unscaledTime;
-        reviveProgress = (Time.unscaledTime - reviveStart) / ReviveSeconds;
+        var target = downed || player == null || !player.Alive() ? null : WorldPartners().Where(p => PartnerDown(p) && p.Actor != null && (player.transform.position - p.Actor.transform.position).sqrMagnitude <= ReviveRange * ReviveRange)
+            .OrderBy(p => (player.transform.position - p.Actor!.transform.position).sqrMagnitude).FirstOrDefault();
+        if (target == null || target.Id != reviveTarget || lastCombatTime > reviveStart) reviveStart = Time.unscaledTime;
+        reviveTarget = target?.Id ?? Unassigned;
+        reviveProgress = target == null ? 0f : (Time.unscaledTime - reviveStart) / ReviveSeconds;
         if (reviveProgress < 1f) return;
-        Send("revive", "");
-        reviveStart = -1f;
+        Send("revive", "", target!.Id, worldScoped: true);
+        reviveStart = Time.unscaledTime;
         reviveProgress = 0f;
     }
 
-    private void ShowReplicaDown(bool down)
+    private void ShowReplicaDown(Partner partner, bool down)
     {
-        if (actor == null || down == replicaDown) return;
-        replicaDown = down;
-        actor.SetAIState(down ? AIState.PassedOut : AIState.Inactive);
+        var actor = partner.Actor;
+        if (actor == null || down == partner.Down) return;
+        partner.Down = down;
+        AIStateRef(actor) = down ? AIState.PassedOut : AIState.Inactive;
         actor.GetComponent<Animator>().SetBool("IsDead", down);
+        if (down) return;
+        actor.MyVitals.Revive();
+        ColliderRef(actor).enabled = true;
     }
 
-    private void DrawRevive()
+    private void UpdateProgressBar()
     {
-        var area = new Rect(Screen.width / 2f - 150f, Screen.height * 0.7f, 300f, 24f);
-        if (reviveProgress > 0f)
+        var helper = partners.Values.FirstOrDefault(p => p.Frame != null && p.Frame.reviveTarget == myId && p.Frame.revive > 0f && p.InWorld(LocalFrameWorld()));
+        string label;
+        float fraction;
+        var reviving = true;
+        if (reviveProgress > 0f && partners.TryGetValue(reviveTarget, out var revived)) { label = "Reviving " + revived.Name; fraction = reviveProgress; }
+        else if (downed && helper != null) { label = helper.Name + " is reviving you"; fraction = helper.Frame!.revive; }
+        else if (downed) { label = "Down: " + Mathf.CeilToInt(downedUntil - Time.unscaledTime) + "s for a friend to reach you"; fraction = (downedUntil - Time.unscaledTime) / BleedOutSeconds; reviving = false; }
+        else
         {
-            GUI.Label(area, "Reviving " + partnerName, CenteredLabel);
-            DrawFill(new Rect(area.x, area.yMax, area.width, 10f), reviveProgress, new Color(0.4f, 0.9f, 0.4f));
+            if (progressBar != null) progressBar.gameObject.SetActive(false);
+            return;
         }
-        else if (downed)
-        {
-            var helping = remoteFrame != null && remoteFrame.revive > 0f;
-            GUI.Label(area, helping ? partnerName + " is reviving you" : "Down. " + partnerName + " has " + Mathf.CeilToInt(downedUntil - Time.unscaledTime) + "s to reach you", CenteredLabel);
-            DrawFill(new Rect(area.x, area.yMax, area.width, 10f), helping ? remoteFrame!.revive : (downedUntil - Time.unscaledTime) / BleedOutSeconds, helping ? new Color(0.4f, 0.9f, 0.4f) : Color.red);
-        }
+        if (progressBar == null && !BuildProgressBar()) return;
+        var bar = progressBar!;
+        bar.gameObject.SetActive(showPanel && !MenuOpen());
+        bar.nameText.text = label;
+        bar.poisonBarFill.gameObject.SetActive(reviving);
+        bar.hpBarFill.gameObject.SetActive(!reviving);
+        (reviving ? bar.poisonBarFill : bar.hpBarFill).localScale = new Vector3(Mathf.Clamp01(fraction), 1f, 1f);
+    }
+
+    private bool BuildProgressBar()
+    {
+        if (hudOwner == null) return false;
+        var source = TargetBarRef(hudOwner);
+        progressBar = Object.Instantiate(source.gameObject, source.transform.parent).GetComponent<TargetBar>();
+        progressBar.enabled = false;
+        progressBar.bossIndicator.SetActive(false);
+        progressBar.rankedUpIndicator.SetActive(false);
+        progressBar.levelText.transform.parent.gameObject.SetActive(false);
+        progressBar.resistanceTemplate.transform.parent.gameObject.SetActive(false);
+        progressBar.enemyOnlyParent.SetActive(true);
+        progressBar.nameText.color = progressBar.normalNameColor;
+        var rect = (RectTransform)progressBar.transform;
+        rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.28f);
+        rect.anchoredPosition = Vector2.zero;
+        return true;
     }
 }

@@ -35,7 +35,7 @@ Write-Output ('Shared floor ' + $shared.a.dungeonDepth + ': ' + $shared.a.worldM
 
 Send 'leave' 'b'
 Start-Sleep -Seconds 3
-& (Join-Path $PSScriptRoot 'Connect-TwoGames.ps1') | Out-Null
+& (Join-Path $PSScriptRoot 'Connect-Games.ps1') | Out-Null
 $rejoined = Wait-Pair { param($a, $b) SameFloor $a $b } 'Quick rejoin on the same floor'
 Write-Output ('Quick rejoin: still ' + $rejoined.b.worldMonsters + ' monsters on the guest, matching the host. No duplicates.')
 
@@ -61,10 +61,10 @@ Wait-Pair { param($a, $b) (SameFloor $a $b) -and !$a.followPrompt } 'Guest going
 Write-Output 'Go to partner took the guest from town onto the host''s floor, and the host''s open prompt closed itself.'
 
 Send-Until 'town' 'a' { param($a, $b) $a.gameScene -eq 'Town_Grove' } 'Host walking to town'
-$released = Wait-Pair { param($a, $b) $a.gameScene -eq 'Town_Grove' -and $b.gameScene -eq 'Dungeon' -and $b.monstersTracked -eq 0 -and !$b.transitioning -and $b.followPrompt } 'Host to town, guest released and asked to follow'
+$released = Wait-Pair { param($a, $b) $a.gameScene -eq 'Town_Grove' -and $b.gameScene -eq 'Dungeon' -and $b.ownsWorld -and !$b.transitioning -and $b.followPrompt } 'Host to town, guest released and asked to follow'
 Start-Sleep -Seconds 5
 if ((State b).gameScene -ne 'Dungeon') { throw 'Guest was pulled to town with the host.' }
-Write-Output 'Host went to town; the guest kept the floor to itself.'
+Write-Output 'Host went to town; the guest took over the floor.'
 Send 'test-swing' 'a'
 Start-Sleep -Seconds 1
 Send 'follow-partner' 'a'
