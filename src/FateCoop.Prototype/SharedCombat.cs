@@ -25,7 +25,8 @@ public sealed partial class Plugin
     private readonly HashSet<int> attackingMirrors = new HashSet<int>();
     private int nextMonsterId = 1;
     private float nextMonsterSync, nextMonsterRefresh;
-    private const float FullRefreshInterval = 5f, ThreatHalfLife = 8f, ThreatSwitchMargin = 1.2f;
+    private const float FullRefreshInterval = 5f, ThreatHalfLife = 8f, ThreatSwitchMargin = 1.2f, MovingSpeed = 0.5f;
+    private readonly Dictionary<Monster, Vector3> lastMonsterPositions = new Dictionary<Monster, Vector3>();
     private readonly Dictionary<Monster, Dictionary<Character, (float amount, float time)>> threat = new Dictionary<Monster, Dictionary<Character, (float, float)>>();
     private bool applyingStrike, confirmingDeath;
     private int hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, effectsSent, effectsTaken;
@@ -89,6 +90,8 @@ public sealed partial class Plugin
         harmony!.Patch(AccessTools.Method(typeof(CharacterVitals), "ApplyDamage"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeDamage)));
         harmony.Patch(RollAttackMethod, prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeRollAttack)));
         harmony.Patch(AccessTools.Method(typeof(CharacterVitals), "Die", new[] { typeof(CharacterVitals.Damage) }), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeVitalsDie)));
+        harmony.Patch(AccessTools.Method(typeof(CharacterVitals), "Die", Type.EmptyTypes), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeVitalsQuietDie)));
+        harmony.Patch(AccessTools.Method(typeof(Character), "UpdatePathing"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeStandInPathing)));
         harmony.Patch(AccessTools.Method(typeof(Monster), "Die", Type.EmptyTypes), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeMonsterDie)));
         harmony.Patch(AccessTools.Method(typeof(Character), "GetDistanceToPlayer"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterDistanceToPlayer)));
         harmony.Patch(AccessTools.Method(typeof(LevelGenerator), "FindCharacterWithinView"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterFindCharacter)));
@@ -124,6 +127,8 @@ public sealed partial class Plugin
         table[attacker] = (table.TryGetValue(attacker, out var entry) ? Decayed(entry) + value : value, Time.unscaledTime);
     }
 
+    private Character? TopThreat(Monster monster) => threat.TryGetValue(monster, out var table) ? table.OrderByDescending(e => Decayed(e.Value)).Select(e => e.Key).FirstOrDefault() : null;
+
     private static void AfterRespondToAttack(Monster __instance)
     {
         var plugin = Active;
@@ -141,6 +146,7 @@ public sealed partial class Plugin
 
     private static bool BeforeDamage(CharacterVitals __instance, CharacterVitals.Damage data)
     {
+        Graze(data);
         var plugin = Active;
         if (plugin == null || !plugin.Connected) return true;
         var target = __instance.Char;
@@ -160,11 +166,20 @@ public sealed partial class Plugin
         }
         if (standIn != null || plugin.PartnerOfPet(target) != null) return false;
         if (!(target is Monster mirror) || !plugin.monsterIds.TryGetValue(mirror, out var id)) return true;
-        var source = data.source != null ? data.source.Char : null;
-        if (data.value > 0 && source != null && (source == Player.PlayerChar || (source.HasMaster() && source.Master() == Player.PlayerChar)))
+        if (data.value > 0 && plugin.IsLocal(data.source != null ? data.source.Char : null))
         {
             plugin.SendToOwner("hit", string.Join("|", id, data.value, (int)data.damageType, data.isCritical ? 1 : 0));
             plugin.hitsSent++;
+        }
+        return false;
+    }
+
+    private bool IsLocal(Character? character)
+    {
+        while (character != null && !IsStandIn(character))
+        {
+            if (character == Player.PlayerChar) return true;
+            character = character.HasMaster() ? character.Master() : null;
         }
         return false;
     }
@@ -185,7 +200,7 @@ public sealed partial class Plugin
         var standIn = plugin.PartnerOf(__instance);
         var mirrorId = !plugin.OwnsWorld ? plugin.MonsterIdOf(__instance) : 0;
         if (standIn == null && mirrorId == 0 && plugin.PartnerOfPet(__instance) == null) return true;
-        var local = source != null && (source == Player.PlayerChar || (source.HasMaster() && source.Master() == Player.PlayerChar));
+        var local = plugin.IsLocal(source);
         if (standIn != null && source != null && (local || (plugin.OwnsWorld && source is Monster)))
         {
             plugin.Send("effect", JsonUtility.ToJson(new EffectMessage { target = 0, source = local ? PlayerTarget(plugin.myId) : plugin.MonsterIdOf(source), level = sourceLevel, spell = isSpellEffect, effect = effect }), standIn.Id, worldScoped: true);
@@ -221,11 +236,15 @@ public sealed partial class Plugin
         return false;
     }
 
-    private static void BeforeVitalsDie(CharacterVitals __instance, CharacterVitals.Damage finalData)
+    private static bool BeforeStandInPathing(Character __instance) => Active == null || !Active.IsStandIn(__instance);
+
+    private static void BeforeVitalsQuietDie(CharacterVitals __instance) => BeforeVitalsDie(__instance, null);
+
+    private static void BeforeVitalsDie(CharacterVitals __instance, CharacterVitals.Damage? finalData)
     {
         var plugin = Active;
-        if (plugin == null || !plugin.OwnsWorld || !plugin.WorldPartners().Any() || !(__instance.Char is Monster monster) || !plugin.monsterIds.TryGetValue(monster, out var id)) return;
-        var killer = plugin.PartnerOf(finalData?.source?.Char)?.Id ?? plugin.myId;
+        if (plugin == null || !plugin.OwnsWorld || !plugin.WorldPartners().Any() || !(__instance.Char is Monster monster) || !plugin.monsterIds.TryGetValue(monster, out var id) || __instance.IsDead) return;
+        var killer = plugin.PartnerOf(finalData?.source?.Char ?? plugin.TopThreat(monster))?.Id ?? plugin.myId;
         plugin.SendWorld("kill", string.Join("|", id, monster.GetExperienceReward(), monster.GetFameReward(), killer));
         plugin.killsSent++;
     }
@@ -316,6 +335,8 @@ public sealed partial class Plugin
         monster.allowDropEquipment = false;
         monster.SetTarget(null);
         monster.StopPathing();
+        var agent = monster.GetComponent<NavMeshAgent>();
+        if (agent != null && agent.isOnNavMesh) agent.isStopped = true;
     }
 
     private void ForgetMonster(int id)
@@ -330,6 +351,7 @@ public sealed partial class Plugin
     {
         foreach (var monster in monsters.Values) shownEffects.Remove(monster);
         threat.Clear();
+        lastMonsterPositions.Clear();
         monsters.Clear();
         monsterIds.Clear();
         monsterStates.Clear();
@@ -470,12 +492,21 @@ public sealed partial class Plugin
         }
     }
 
+    private bool MovedSinceLastFrame(Monster monster)
+    {
+        var position = monster.transform.position;
+        var moved = lastMonsterPositions.TryGetValue(monster, out var before) && Time.deltaTime > 0f && (position - before).magnitude / Time.deltaTime > MovingSpeed;
+        lastMonsterPositions[monster] = position;
+        return moved;
+    }
+
     private static void AfterMonsterUpdate(Monster __instance)
     {
         var plugin = Active;
-        if (plugin == null || plugin.OwnsWorld || __instance.MyVitals.IsDead || !plugin.monsterIds.TryGetValue(__instance, out var id) || !plugin.monsterStates.TryGetValue(id, out var state)) return;
+        if (plugin == null || __instance.MyVitals.IsDead) return;
         var animator = __instance.GetComponent<Animator>();
         if (animator == null) return;
+        if (plugin.OwnsWorld || !plugin.monsterIds.TryGetValue(__instance, out var id) || !plugin.monsterStates.TryGetValue(id, out var state)) return;
         var attacking = (state.Flags & MonsterState.Attacking) != 0;
         if (attacking && plugin.attackingMirrors.Add(id))
         {
@@ -487,7 +518,7 @@ public sealed partial class Plugin
             plugin.attackingMirrors.Remove(id);
             animator.speed = 1f;
         }
-        var walking = (state.Flags & (MonsterState.Walking | MonsterState.Running)) != 0 || (__instance.transform.position - state.Position).sqrMagnitude > 0.04f;
+        var walking = plugin.MovedSinceLastFrame(__instance);
         animator.SetBool("IsWalking", walking && !attacking);
         animator.SetBool("IsRunning", walking && !attacking && (state.Flags & MonsterState.Running) != 0);
         animator.SetBool("IsAttacking", attacking);

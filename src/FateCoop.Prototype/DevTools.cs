@@ -17,6 +17,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
+    private const int MainHandSlot = 6;
     private Coroutine? testWalk;
     private float nextPoll, nextSnapshot;
     private Monster? aggroMonster;
@@ -250,6 +251,32 @@ public sealed partial class Plugin
             case "test-fate-town":
                 AccessTools.Method(typeof(FateChoice), "OnThirdChoice").Invoke(SingletonBehaviour<FateChoiceUI>.Instance.choice, null);
                 break;
+            case "test-bow":
+                var archer2 = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
+                var bowData = SingletonBehaviour<FateDB>.Instance.AllItems.Find(i => i.itemType == ItemType.Bow) ?? throw new InvalidOperationException("No bow in the item database.");
+                var held = archer2.inventory.FirstOrDefault(i => i != null && i.slotIndex == MainHandSlot);
+                if (held != null) archer2.RemoveItemFromInventory(held, RemoveItemReason.Drop);
+                var bow = new Item(bowData);
+                if (!archer2.AddItemToInventory(bow, AddItemReason.Loot, MainHandSlot, desiredSlotIsGlobal: true)) throw new InvalidOperationException("Couldn't equip the bow.");
+                if (archer2.activeWeapon != bow) archer2.EquipItem(bow, archer2.GetActiveWeaponSet);
+                break;
+            case "test-shift-heal":
+                var healer = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
+                var heal = SingletonBehaviour<FateDB>.Instance.allSpells.FirstOrDefault(s => s != null && s.IsHealSpell() && Friendly(s) && s.targetType == ItemTarget.User) ?? throw new InvalidOperationException("No friendly self heal.");
+                healer.activeSpell = heal;
+                healer.mana = healer.MaxMana();
+                testShift = true;
+                try { healer.TryCastCurrentSpell(); }
+                finally { testShift = false; }
+                break;
+            case "test-portal":
+                if (!SingletonBehaviour<PortalManager>.Instance.TryCreatePortal(Player.PlayerChar)) throw new InvalidOperationException("Couldn't open a portal here.");
+                break;
+            case "test-use-portal":
+                var friendPortal = partners.Values.Select(p => p.TownPortal).FirstOrDefault(p => p != null) ?? throw new InvalidOperationException("No friend portal here.");
+                friendPortal.GetComponent<EnterPortal>().Interact(Player.PlayerChar);
+                AnswerPrompt(SingletonBehaviour<PromptUI>.Instance, true);
+                break;
             case "follow-partner":
                 if (followAnswer != null) AnswerPrompt(SingletonBehaviour<PromptUI>.Instance, true);
                 else GoToPartner((parts.Length > 1 && partners.TryGetValue(int.Parse(parts[1], CultureInfo.InvariantCulture), out var leader) ? leader : PartnersElsewhere().FirstOrDefault()) ?? throw new InvalidOperationException("Nobody to go to."));
@@ -342,7 +369,7 @@ public sealed partial class Plugin
             openChests = Object.FindObjectsOfType<ContainerInteractable>().Count(c => c.IsOpen), brokenBarrels = Object.FindObjectsOfType<ContainerDestroyable>().Count(b => b.IsDestroyed), primaryHp = player != null ? player.hp : 0f, primaryExperience = player != null ? (long)player.experience : 0,
             primaryOnNavMesh = player != null && player.GetComponent<NavMeshAgent>() != null && player.GetComponent<NavMeshAgent>().isOnNavMesh,
             gameScene = SceneLoad.CurrentScene.ToString(), followPrompt = followAnswer != null, inCombat = InCombat, partnerElsewhere = PartnersElsewhere().Any(), downed = downed, replicaDown = partner != null && partner.Down, reviveProgress = reviveProgress, chatReceived = chatReceived, lastChat = chatLines.Count > 0 ? chatLines[chatLines.Count - 1].line : "", fateChoice = SingletonBehaviour<FateChoiceUI>.InstanceExists() && FateChoiceUI.FateChoiceActive,
-            prototypeActors = partners.Values.Count(p => p.Actor != null)
+            prototypeActors = partners.Values.Count(p => p.Actor != null), partnerTownPortals = partners.Values.Count(p => p.TownPortal != null), partnerPortals = partners.Values.Count(p => p.Portal != null), partnerPlates = partners.Values.Count(p => p.Plate != null), rangedRolls = rangedRolls, rangedMisses = rangedMisses, grazes = grazes, rangedEquipped = player != null && UsingRanged(player)
         };
         var json = JsonUtility.ToJson(telemetry);
         File.WriteAllText(Path.Combine(controlRoot, "status.json"), json);
@@ -356,7 +383,8 @@ public sealed partial class Plugin
         public int primaryId, guestId, spawnedTotal, aiCallsSuppressed, prototypeActors, worldEpoch, dungeonDepth, networkAccepted, networkRejected, localPort, myId, worldOwner, partnerCount, partnersInWorld, chatReceived;
         public Vector3 primaryPosition, guestPosition, remotePetPosition;
         public bool guestOnNavMesh, guestWalking, guestRunning, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, ownsWorld, followPrompt, inCombat, partnerElsewhere, downed, replicaDown, fateChoice;
-        public int remotePetActors, localPetCount;
+        public int remotePetActors, localPetCount, partnerTownPortals, partnerPortals, partnerPlates, rangedRolls, rangedMisses, grazes;
+        public bool rangedEquipped;
         public int monstersTracked, worldMonsters, trackedHp, trackedDead, hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, swingsPlayed, castsPlayed, groundItems, lootGiven, lootTaken, questRewardsSent, questRewardsTaken, effectsSent, effectsTaken, damagePopups, spellsReplayed, arrowsDrawn, levelUpsPlayed, mirrorEffects, replicaFishing, localFishing, localWeaponParticles, replicaWeaponParticles, dropsSent, bagItems, openChests, brokenBarrels;
         public long primaryExperience;
     }

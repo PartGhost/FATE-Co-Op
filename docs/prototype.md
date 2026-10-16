@@ -1,3 +1,20 @@
+# Grove co-op prototype — 0.18.0
+
+Fixes from the first 0.17 playtest.
+
+- **No reload when following someone who is still loading.** Frames carry `travelDepth` while a player is in transit. A trip to a floor that a lower-id player is still loading waits (up to 20 s) for their world and joins it, instead of building a second copy and reloading into theirs.
+- **Party portraits in town.** Partner slots are now children of the game's `PartyUI` vertical layout, inserted before the controller blocker, so the game places them under the last visible slot (fixed coordinates broke in town). Up to 7 rows; extra rows shrink with `childScaleHeight`.
+- **Name tags in the game's style.** A clone of the interactable tooltip canvas (Gilland font, name tag backdrop, billboarding) over each partner, with two clones of the target bar for health and mana. They hide while menus are open. The IMGUI boxes are gone.
+- **Minimap arrows.** The game's `Btn_Arrow-Yellow_Idle` sprite sits on the minimap edge pointing at each friend on your floor who is outside the minimap view.
+- **Quest icons the right way up.** Minimap icons now turn around the vertical axis by the camera's change in yaw instead of rebuilding their tilt from Euler angles.
+- **Sounds stay local.** Attacks, rolls, spells, chest and barrel sounds caused by other players or mirrored monsters are scoped to their position: normal within 10 units, positional out to 30, silent beyond. Monster sounds (their own AudioSource) and positional sounds beyond 30 units are dropped.
+- **Spells from non-owners.** Local-source checks walk the master chain and skip stand-ins. The replica's profile is resent when level or attributes change, so the owner scales a partner's spells with current stats. Kills by damage over time (the no-argument `Die`) send the kill message, credited to the top threat.
+- **Heal and buff friends.** The game tags friendly spells as targeting "All", not "Good", which is why hovering never worked; anything not aimed at Evil now counts as friendly. Hovering a friend works by screen distance (within 70 px). Holding Shift casts friendly self-buffs and heals on the friend nearest the mouse (the self hit and its effect are redirected; mana is still spent once). Morphs, portals and Discover stay on yourself.
+- **Ranged.** Bows and crossbows turn toward the target before the shot. A transpiler makes the player's ranged hit roll always land; a roll that would have missed is a graze (half damage, quarter on a crit, no crit). Walls still block.
+- **Animations.** `UpdatePathing` is skipped for partner stand-ins, so their walk and run bools survive to the animator. Mirrors animate from their real movement each frame, so monsters that wander off after you go down walk instead of sliding.
+- **Friends' portals.** Portals show on the floor for everyone there and, in town, next to the portal spot with the owner's name. Stepping through a friend's town portal asks first, then loads that floor and puts you at their portal.
+- `Test-PortalsAndPlates.ps1` covers name tags, portals on the floor and in town, and using a friend's portal. `Test-RangedAndHeals.ps1` gives the player a bow (20 shots, no misses, some grazes) and checks a Shift heal reaches the partner. `Enter-HostDungeon.ps1` moves to a fresh floor when the current one has fewer than 8 live monsters.
+
 # Grove co-op prototype — 0.17.0
 
 ## Up to 16 players

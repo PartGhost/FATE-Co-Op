@@ -1,4 +1,6 @@
-using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using Cleverous.VaultInventory;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
@@ -8,8 +10,10 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
+    private const float TownPortalSpacing = 2.5f;
+    private static readonly MethodInfo PortalSpawnPointMethod = AccessTools.Method(typeof(Town), "GetPortalSpawnPoint");
+    private static readonly MethodInfo InteractableNameSetter = AccessTools.PropertySetter(typeof(InteractableSceneObject), "InteractableName");
     private string localPortalWorld = "";
-    private Vector3 localPortalPosition;
 
     private void InstallPortalHooks()
     {
@@ -27,40 +31,62 @@ public sealed partial class Plugin
     {
         var entry = PortalEntry();
         if (entry == null) { localPortalWorld = ""; return; }
-        if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || LevelGenerator.currentInstance == null || LevelGenerator.currentInstance.GetLevelDepth() != entry.levelDepth || CurrentWorldKey().Length == 0) return;
-        localPortalWorld = CurrentWorldKey();
-        localPortalPosition = entry.dungeonPosition;
+        if (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && LevelGenerator.currentInstance != null && LevelGenerator.currentInstance.GetLevelDepth() == entry.levelDepth && CurrentWorldKey().Length > 0)
+            localPortalWorld = CurrentWorldKey();
     }
 
     private void ShowPartnerPortal(Partner partner)
     {
-        var wanted = partner.Frame != null && partner.Frame.portalWorld.Length > 0 && partner.Frame.portalWorld == CurrentWorldKey() && FinitePosition(partner.Frame.portalPosition);
-        if (!wanted)
-        {
-            if (partner.Portal != null) Object.Destroy(partner.Portal);
-            partner.Portal = null;
-            return;
-        }
-        var position = partner.Frame!.portalPosition;
-        if (partner.Portal != null && (partner.Portal.transform.position - position).sqrMagnitude < 1f) return;
-        if (partner.Portal != null) Object.Destroy(partner.Portal);
-        partner.Portal = Object.Instantiate(SingletonBehaviour<FateDB>.Instance.portalPrefab, ActiveLevel.AdjustPositionToNavMesh(position, position, performObstructionTest: false), Quaternion.identity);
-        partner.Portal.name = "FateCoop_Partner_Portal_" + partner.Id;
+        var frame = partner.Frame;
+        var inDungeon = frame != null && frame.portalWorld.Length > 0 && frame.portalWorld == CurrentWorldKey() && FinitePosition(frame.portalPosition);
+        partner.Portal = PlacePortal(partner.Portal, inDungeon ? frame!.portalPosition : (Vector3?)null, partner);
+        var inTown = frame != null && frame.portalDepth > 0 && SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove && SingletonBehaviour<Town>.InstanceExists();
+        partner.TownPortal = PlacePortal(partner.TownPortal, inTown ? TownPortalSpot(partner) : (Vector3?)null, partner);
+        if (partner.TownPortal == null) return;
+        var portal = partner.TownPortal.GetComponent<EnterPortal>();
+        portal.destinationRealm = RealmData.RealmId.Grove;
+        InteractableNameSetter.Invoke(portal, new object[] { partner.Name + ": Floor " + frame!.portalDepth });
+        portal.onDestinationSet?.Invoke();
     }
 
-    private static void BeforePortalUse(EnterPortal __instance)
+    private Vector3 TownPortalSpot(Partner partner)
+    {
+        var town = SingletonBehaviour<Town>.Instance;
+        var spot = town.possibleSpawnPoints[(int)PortalSpawnPointMethod.Invoke(town, new object[] { RealmData.RealmId.Grove })].position;
+        var slot = partners.Keys.ToList().IndexOf(partner.Id) + 1;
+        return spot + Vector3.right * TownPortalSpacing * slot;
+    }
+
+    private static GameObject? PlacePortal(GameObject? existing, Vector3? position, Partner partner)
+    {
+        if (position == null)
+        {
+            if (existing != null) Object.Destroy(existing);
+            return null;
+        }
+        if (existing != null && (existing.transform.position - position.Value).sqrMagnitude < 1f) return existing;
+        if (existing != null) Object.Destroy(existing);
+        var portal = Object.Instantiate(SingletonBehaviour<FateDB>.Instance.portalPrefab, ActiveLevel.AdjustPositionToNavMesh(position.Value, position.Value, performObstructionTest: false), Quaternion.identity);
+        portal.name = "FateCoop_Partner_Portal_" + partner.Id;
+        return portal;
+    }
+
+    private static bool BeforePortalUse(EnterPortal __instance)
     {
         var plugin = Active;
-        if (plugin == null || SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || LevelGenerator.currentInstance == null) return;
-        foreach (var partner in plugin.partners.Values)
+        var partner = plugin?.partners.Values.FirstOrDefault(p => p.TownPortal != null && p.TownPortal == __instance.gameObject);
+        if (partner?.Frame == null) return true;
+        var depth = partner.Frame.portalDepth;
+        var arrival = partner.Frame.portalPosition;
+        SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw("Go through " + partner.Name + "'s portal to Floor " + depth + "?", yes =>
         {
-            if (partner.Portal == null || partner.Portal != __instance.gameObject) continue;
-            var realm = SaveData.CurrentSaveData.GetRealmSave(Fate.GetDungeonTownRealm(RealmData.RealmId.Grove));
-            realm.portalSave ??= new PortalSave { portalSaves = new List<PortalSaveData>() };
-            realm.portalSave.portalSaves ??= new List<PortalSaveData>();
-            realm.portalSave.portalSaves.RemoveAll(s => s.dungeonRealm == RealmData.RealmId.Grove);
-            realm.portalSave.portalSaves.Add(new PortalSaveData { dungeonRealm = RealmData.RealmId.Grove, dungeonPosition = __instance.transform.position, levelDepth = LevelGenerator.currentInstance.GetLevelDepth() });
-            return;
-        }
+            if (!yes) return;
+            plugin!.arrivePoint = arrival;
+            Player.isEnteringDungeonFromTownDoor = true;
+            SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm = RealmData.RealmId.Grove;
+            SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).SetLastVisitedDungeonDepth(depth);
+            SceneLoad.LoadAsync(Tableflip.Scene.Dungeon, true);
+        }, twoButtons: true, "Yes", "No");
+        return false;
     }
 }

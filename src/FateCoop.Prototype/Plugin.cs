@@ -61,6 +61,8 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallReviveHooks();
             InstallAllySpellHooks();
             InstallPortalHooks();
+            InstallSoundHooks();
+            InstallRangedHooks();
             commandLineLobby = LobbyFromArguments(Environment.GetCommandLineArgs());
             SetStatus("Ready.");
             Snapshot();
@@ -143,6 +145,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             UpdateSession();
             UpdateMenus();
             UpdatePartnerHud();
+            UpdateNameplates();
             UpdateChat();
             if (keyboard != null && keyboard.f11Key.wasPressedThisFrame) showPanel = !showPanel;
             if (testTools) UpdateDevTools();
@@ -166,18 +169,6 @@ public sealed partial class Plugin : BaseUnityPlugin
     private void OnGUI()
     {
         if (!enabled || !showPanel || PauseUI.IsShown || PromptUI.IsPromptActive) return;
-        if (!MenuOpen() && Camera.main != null)
-        {
-            foreach (var partner in partners.Values.Where(p => p.Actor != null && p.Frame != null))
-            {
-                var screenPoint = Camera.main.WorldToScreenPoint(partner.Actor!.transform.position + Vector3.up * 2.4f);
-                if (screenPoint.z <= 0) continue;
-                var label = new Rect(screenPoint.x - 70, Screen.height - screenPoint.y - 12, 140, 24);
-                GUI.Box(label, partner.Name);
-                DrawBar(new Rect(label.x, label.yMax + 2, label.width, 6), partner.Frame!.hp, partner.Frame.maxHp, Color.red);
-                DrawBar(new Rect(label.x, label.yMax + 9, label.width, 4), partner.Frame.mana, partner.Frame.maxMana, new Color(0.25f, 0.5f, 1f));
-            }
-        }
         DrawChat(Screen.height - 20f);
     }
 

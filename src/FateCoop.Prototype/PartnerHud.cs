@@ -1,4 +1,5 @@
 using System.Linq;
+using Cleverous.VaultInventory;
 using HarmonyLib;
 using Tableflip;
 using TMPro;
@@ -10,10 +11,11 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    private const int MaxHudRows = 8;
+    private const int MaxHudRows = 7;
     private static readonly AccessTools.FieldRef<PlayerUI, PartyUI> PartyUiRef = AccessTools.FieldRefAccess<PlayerUI, PartyUI>("partyUI");
     private static readonly AccessTools.FieldRef<PartyUI, PartyPetUI> PetSlotRef = AccessTools.FieldRefAccess<PartyUI, PartyPetUI>("petUI");
     private static readonly AccessTools.FieldRef<PartyUI, PartyMemberUI[]> AllySlotsRef = AccessTools.FieldRefAccess<PartyUI, PartyMemberUI[]>("partyMemberUIs");
+    private static readonly AccessTools.FieldRef<PartyUI, UiBlockingPanel> PartyBlockerRef = AccessTools.FieldRefAccess<PartyUI, UiBlockingPanel>("controllerInputBlocker");
     private static readonly AccessTools.FieldRef<PartyCharacterUI, Image> HpRingRef = AccessTools.FieldRefAccess<PartyCharacterUI, Image>("hpMeter");
     private static readonly AccessTools.FieldRef<PartyCharacterUI, Image> ManaRingRef = AccessTools.FieldRefAccess<PartyCharacterUI, Image>("manaMeter");
     private static readonly AccessTools.FieldRef<PartyCharacterUI, TextMeshProUGUI> SlotNameRef = AccessTools.FieldRefAccess<PartyCharacterUI, TextMeshProUGUI>("nameText");
@@ -21,9 +23,10 @@ public sealed partial class Plugin
     private PlayerUI? hudOwner;
     private float nextHudSearch;
 
-    private static T CloneSlot<T>(T source) where T : PartyCharacterUI
+    private static T CloneSlot<T>(T source, Transform before) where T : PartyCharacterUI
     {
         var clone = Object.Instantiate(source.gameObject, source.transform.parent).GetComponent<T>();
+        clone.transform.SetSiblingIndex(before.GetSiblingIndex());
         clone.enabled = false;
         clone.navigation = new Navigation { mode = Navigation.Mode.None };
         clone.gameObject.AddComponent<CanvasGroup>().blocksRaycasts = false;
@@ -51,10 +54,9 @@ public sealed partial class Plugin
         UpdateProgressBar();
         var party = PartyUiRef(hudOwner);
         var allies = AllySlotsRef(party);
-        var origin = ((RectTransform)allies[0].transform).anchoredPosition;
-        var step = ((RectTransform)allies[1].transform).anchoredPosition - origin;
-        var gameRows = allies.Count(slot => slot.gameObject.activeSelf);
-        var row = 0;
+        var blocker = PartyBlockerRef(party).transform;
+        party.GetComponent<VerticalLayoutGroup>().childScaleHeight = true;
+        var gameRows = allies.Count(slot => slot.gameObject.activeSelf) + (PetSlotRef(party).gameObject.activeSelf ? 1 : 0);
         var visible = partners.Values.Where(p => p.Frame != null && p.Name.Length > 0).ToList();
         var showPets = visible.Count * 2 + gameRows <= MaxHudRows;
         var scale = Mathf.Min(1f, (float)(MaxHudRows - gameRows) / (visible.Count * (showPets ? 2 : 1)));
@@ -63,14 +65,14 @@ public sealed partial class Plugin
         {
             if (partner.Slot == null)
             {
-                partner.Slot = CloneSlot(allies[0]);
-                partner.PetSlot = CloneSlot(PetSlotRef(party));
+                partner.Slot = CloneSlot(allies[0], blocker);
+                partner.PetSlot = CloneSlot(PetSlotRef(party), blocker);
                 ((PartyPetUI)partner.PetSlot).OnInputBehaviorChange(SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.Instance.LocalInputBehavior);
                 ManaRingRef(partner.PetSlot).fillAmount = 0f;
                 partner.SlotPetModel = "";
             }
             var frame = partner.Frame!;
-            Place(partner.Slot, origin + step * (gameRows + scale * row++), scale);
+            partner.Slot.transform.localScale = Vector3.one * scale;
             partner.Slot.gameObject.SetActive(showPanel);
             var theirs = PartnerPlace(frame);
             var place = PartnerDown(partner) ? "Down" : partner.InWorld(LocalFrameWorld()) ? "" : theirs.Length > 0 ? DescribePlace(theirs) : "Travelling";
@@ -81,7 +83,7 @@ public sealed partial class Plugin
             var petShown = showPets && showPanel && pet != null && pet.present;
             partner.PetSlot!.gameObject.SetActive(petShown);
             if (!petShown) continue;
-            Place(partner.PetSlot, origin + step * (gameRows + scale * row++), scale);
+            partner.PetSlot.transform.localScale = Vector3.one * scale;
             SlotNameRef(partner.PetSlot).text = pet!.name;
             FillRing(partner.PetSlot, pet.hp, pet.maxHp, 0, 0);
             if (pet.model == partner.SlotPetModel) continue;
@@ -90,13 +92,6 @@ public sealed partial class Plugin
             var picture = SingletonBehaviour<FateDB>.Instance.PetProfilePictures.FirstOrDefault(p => p.family == family);
             if (picture != null) SlotPictureRef(partner.PetSlot).texture = picture.regular;
         }
-    }
-
-    private static void Place(PartyCharacterUI slot, Vector2 position, float scale)
-    {
-        var rect = (RectTransform)slot.transform;
-        rect.anchoredPosition = position;
-        rect.localScale = Vector3.one * scale;
     }
 
     private static void KeepPortrait(Partner partner, Texture2D picture)

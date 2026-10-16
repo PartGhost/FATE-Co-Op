@@ -33,7 +33,8 @@ public sealed partial class Plugin
         internal int Swings = -1, Casts = -1, Arrows = -1, LevelUps = -1, Spells = -1, Fishing;
         internal FishingPole? Pole;
         internal LineRenderer? ArrowLine;
-        internal GameObject? Portal;
+        internal GameObject? Portal, TownPortal, Plate;
+        internal RectTransform? HpFill, ManaFill, Arrow;
         internal PartyCharacterUI? Slot, PetSlot;
         internal Texture? Portrait;
 
@@ -54,7 +55,9 @@ public sealed partial class Plugin
         {
             if (Slot != null) Object.Destroy(Slot.gameObject);
             if (PetSlot != null) Object.Destroy(PetSlot.gameObject);
+            if (Arrow != null) Object.Destroy(Arrow.gameObject);
             Slot = PetSlot = null;
+            Arrow = null;
         }
     }
 
@@ -139,10 +142,10 @@ public sealed partial class Plugin
             return data;
         }).ToList();
         var name = LocalName();
-        var key = name + player.GetActiveWeaponSet + JsonUtility.ToJson(new ItemStorage { items = equipment });
-        if (key == sentProfileKey) return;
         var save = new PlayerSaveData();
         player.FillPlayerSaveData(ref save);
+        var key = name + player.GetActiveWeaponSet + player.Level + JsonUtility.ToJson(new ItemStorage { items = equipment }) + string.Join(",", save.attributes.Select(JsonUtility.ToJson));
+        if (key == sentProfileKey) return;
         save = save.CreatePartyMemberCopy();
         save.playerName = name;
         save.lineage = 0;
@@ -292,16 +295,5 @@ public sealed partial class Plugin
             if (partner.Pet != null && partner.PetTrail.Sample(partner.RenderTime, out var petPosition, out var petYaw, out var petLive)) MoveReplica(partner.Pet, petPosition, petYaw, petLive, running);
         }
         UpdateMirrors();
-    }
-
-    private static void DrawBar(Rect area, int value, int max, Color fill) => DrawFill(area, max > 0 ? (float)value / max : 0f, fill);
-
-    private static void DrawFill(Rect area, float fraction, Color fill)
-    {
-        GUI.color = Color.black;
-        GUI.DrawTexture(area, Texture2D.whiteTexture);
-        GUI.color = fill;
-        GUI.DrawTexture(new Rect(area.x, area.y, area.width * Mathf.Clamp01(fraction), area.height), Texture2D.whiteTexture);
-        GUI.color = Color.white;
     }
 }

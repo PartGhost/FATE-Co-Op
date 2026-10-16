@@ -13,12 +13,13 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const string TownKey = "GroveTown";
-    private const float JoinWait = 5f, ArrivalSpacing = 1.5f;
+    private const float JoinWait = 5f, ArrivalWait = 20f, ArrivalSpacing = 1.5f;
     private readonly string sessionId = Guid.NewGuid().ToString("N");
     private string layoutHash = "", worldKey = "", requestedWorld = "";
-    private int worldOwner = HostId, joiningOwner, arriveNear = Unassigned;
+    private int worldOwner = HostId, joiningOwner, arriveNear = Unassigned, travelDepth, heldDepth;
     private WorldSnapshot? pendingWorld, joiningWorld;
     private Action? heldTravel;
+    private Vector3? arrivePoint;
     private float heldUntil;
     private bool heldGoesDown = true, replayingTravel;
 
@@ -49,8 +50,9 @@ public sealed partial class Plugin
     {
         var plugin = Active;
         if (plugin == null) return true;
-        if (sceneIndex == (int)Tableflip.Scene.Dungeon && plugin.HoldTravel(SaveData.CurrentSaveData.GetLatestDepth(RealmData.RealmId.Grove), true,
-            () => SceneLoad.LoadAsync(sceneIndex, save, withLoadingScreen, onDone, fadeIn, fadeOut))) return false;
+        var depth = sceneIndex == (int)Tableflip.Scene.Dungeon ? SaveData.CurrentSaveData.GetLatestDepth(RealmData.RealmId.Grove) : 0;
+        if (depth > 0 && plugin.HoldTravel(depth, true, () => SceneLoad.LoadAsync(sceneIndex, save, withLoadingScreen, onDone, fadeIn, fadeOut))) return false;
+        plugin.travelDepth = depth;
         plugin.BeginWorldChange();
         return true;
     }
@@ -60,6 +62,7 @@ public sealed partial class Plugin
         var plugin = Active;
         if (plugin == null) return true;
         if (plugin.HoldTravel(newLevelDepth, goesDown, () => __instance.ReplaceDungeon(newWorldLocationX, newWorldLocationZ, newLevelDepth, newLevelRealm, goesDown, useSavedPosition, ignoreSavedState, skipSave))) return false;
+        plugin.travelDepth = newLevelDepth;
         plugin.BeginWorldChange();
         return true;
     }
@@ -70,15 +73,26 @@ public sealed partial class Plugin
     private bool HoldTravel(int depth, bool goesDown, Action travel)
     {
         if (replayingTravel || pendingWorld != null || heldTravel != null) return false;
-        var host = partners.Values.Where(p => p.Frame != null && p.Frame.scene == Tableflip.Scene.Dungeon.ToString() && p.Frame.depth == depth && p.Frame.worldKey.Length > 0 && p.Frame.owner != myId)
-            .OrderBy(p => p.Frame!.owner).FirstOrDefault();
-        if (host == null) return false;
-        RequestWorld(host.Frame!);
+        var ready = ReadyAt(depth);
+        if (ready != null)
+        {
+            RequestWorld(ready);
+            heldDepth = 0;
+            heldUntil = Time.unscaledTime + JoinWait;
+        }
+        else if (partners.Values.Any(p => p.Id < myId && p.Frame != null && p.Frame.worldKey.Length == 0 && p.Frame.travelDepth == depth))
+        {
+            heldDepth = depth;
+            heldUntil = Time.unscaledTime + ArrivalWait;
+        }
+        else return false;
         heldTravel = travel;
         heldGoesDown = goesDown;
-        heldUntil = Time.unscaledTime + JoinWait;
         return true;
     }
+
+    private PeerFrame? ReadyAt(int depth) => partners.Values.Select(p => p.Frame)
+        .Where(f => f != null && f.scene == Tableflip.Scene.Dungeon.ToString() && f.depth == depth && f.worldKey.Length > 0 && f.owner != myId).OrderBy(f => f!.owner).FirstOrDefault();
 
     private void RequestWorld(PeerFrame target)
     {
@@ -88,6 +102,12 @@ public sealed partial class Plugin
 
     private void UpdateHeldTravel()
     {
+        if (heldTravel != null && heldDepth > 0 && ReadyAt(heldDepth) is PeerFrame arrived)
+        {
+            RequestWorld(arrived);
+            heldDepth = 0;
+            heldUntil = Time.unscaledTime + JoinWait;
+        }
         if (heldTravel == null || Time.unscaledTime < heldUntil) return;
         var travel = heldTravel;
         heldTravel = null;
@@ -161,6 +181,7 @@ public sealed partial class Plugin
         else worldOwner = partners.Values.Where(p => p.InWorld(TownKey)).Select(p => p.Frame!.owner).DefaultIfEmpty(myId).Min();
         joiningWorld = null;
         requestedWorld = "";
+        travelDepth = 0;
         ArriveNearPartner();
         Logger.LogInfo($"WORLD_READY key={CurrentWorldKey()} owner={worldOwner}");
     }
@@ -168,11 +189,12 @@ public sealed partial class Plugin
     private void ArriveNearPartner()
     {
         var target = arriveNear;
+        var point = arrivePoint;
         arriveNear = Unassigned;
-        if (!partners.TryGetValue(target, out var partner) || partner.Frame == null || partner.Frame.worldKey != CurrentWorldKey()) return;
-        var beside = partner.Frame.primaryPosition + Quaternion.Euler(0, partner.Frame.primaryYaw, 0) * Vector3.right * ArrivalSpacing;
-        if (NavMesh.SamplePosition(beside, out var hit, 3f, NavMesh.AllAreas) || NavMesh.SamplePosition(partner.Frame.primaryPosition, out hit, 3f, NavMesh.AllAreas))
-            Player.PlayerChar.TeleportToPosition(hit.position);
+        arrivePoint = null;
+        if (partners.TryGetValue(target, out var partner) && partner.Frame != null && partner.Frame.worldKey == CurrentWorldKey())
+            point = partner.Frame.primaryPosition + Quaternion.Euler(0, partner.Frame.primaryYaw, 0) * Vector3.right * ArrivalSpacing;
+        if (point.HasValue && NavMesh.SamplePosition(point.Value, out var hit, 3f, NavMesh.AllAreas)) Player.PlayerChar.TeleportToPosition(hit.position);
     }
 
     private WorldSnapshot ExportWorld()

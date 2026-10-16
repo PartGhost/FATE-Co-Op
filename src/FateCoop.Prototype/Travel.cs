@@ -94,6 +94,7 @@ public sealed partial class Plugin
         }
         RequestWorld(partner.Frame!);
         heldTravel = () => Notify("Couldn't reach " + partner.Name + "'s floor. Try again.");
+        heldDepth = 0;
         heldUntil = Time.unscaledTime + JoinWait;
     }
 

@@ -27,9 +27,11 @@ function Wait-Follow {
     }
     Send 'follow-partner' 'b'
 }
-$a = Read-State 'a'
-if ($a.gameScene -eq 'Town_Grove') { Send 'enter-dungeon' }
-if ((Read-State 'b').gameScene -eq 'Town_Grove') { Send 'enter-dungeon' 'b' }
+foreach ($instance in @('a','b')) { if ((Read-State $instance).gameScene -eq 'Dungeon') { Send 'town' $instance } }
+$deadline = [DateTime]::UtcNow.AddSeconds(60)
+while ([DateTime]::UtcNow -lt $deadline -and @('a','b' | Where-Object { $s = Read-State $_; $s.gameScene -ne 'Town_Grove' -or $s.transitioning }).Count -gt 0) { Start-Sleep -Milliseconds 400 }
+Send 'enter-dungeon'
+Send 'enter-dungeon' 'b'
 $floor1 = Wait-Pair 1
 Write-Output 'Floor 1: matching maze cells, stairs, world identity and one guest each.'
 $movement = @()

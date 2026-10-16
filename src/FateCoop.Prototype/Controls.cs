@@ -41,8 +41,14 @@ public sealed partial class Plugin
     {
         if (Active == null || !__instance.fixedRotation) return;
         var saved = SavedIconRotation(__instance);
-        __instance.transform.rotation = __instance.isCamera ? Quaternion.AngleAxis(Active.cameraYaw, Vector3.up) * saved
-            : Quaternion.Euler(saved.eulerAngles.x, ProdigyCamera.GameCamera.transform.eulerAngles.y, saved.eulerAngles.z);
+        if (__instance.isCamera)
+        {
+            __instance.transform.rotation = Quaternion.AngleAxis(Active.cameraYaw, Vector3.up) * saved;
+            return;
+        }
+        var top = saved * Vector3.up;
+        var savedYaw = Mathf.Atan2(top.x, top.z) * Mathf.Rad2Deg;
+        __instance.transform.rotation = Quaternion.AngleAxis(ProdigyCamera.GameCamera.transform.eulerAngles.y - savedYaw, Vector3.up) * saved;
     }
 
     private static void AfterReadInputs(InputBroker __instance)

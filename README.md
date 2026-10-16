@@ -12,7 +12,9 @@ Online co-op for **FATE: Reawakened** (Original FATE, Grove) for 2 to 16 players
 - Shared quests in the real quest log: anyone's kills and quest items count, and everyone gets the reward.
 - Go where you like. Same floor (or town) means you play together, and joining a floor someone is already on never reloads it. When everyone leaves your floor you're asked if you want to follow, and "Go to <name>" in the Escape menu takes you next to them (not during a fight).
 - Revive: dying near a friend puts you down instead. A friend stands next to you for 4 seconds to get you up. After 30 seconds you die for real.
-- Heal and buff friends by hovering them and casting. Town portals work for everyone.
+- Heal and buff friends: hover them and cast, or hold Shift while casting a self buff or heal to put it on the friend nearest your mouse. Town portals work for everyone, in the dungeon and in town.
+- Bows and crossbows aim at your target and always land when it's in range; a shot that would have missed grazes for half damage.
+- An arrow on the edge of the minimap points to friends who are off the map.
 - Text chat with speech bubbles.
 - WASD movement and a middle-mouse camera.
 - Monsters get tougher for each extra player on the floor, and they go after whoever is doing the most damage.

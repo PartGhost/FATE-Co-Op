@@ -23,6 +23,12 @@ if ($hostState.gameScene -ne 'Dungeon' -or !$hostState.ownsWorld) {
     Send 'enter-dungeon' $Instances[0]
     Wait-All { param($s) $s[0].gameScene -eq 'Dungeon' -and !$s[0].transitioning -and $s[0].worldKey -ne '' } 'Host on floor 1' | Out-Null
 }
+while ((State $Instances[0]).monstersTracked - (State $Instances[0]).trackedDead -lt 8) {
+    $depth = (State $Instances[0]).dungeonDepth
+    Send 'test-resume' $Instances[0]
+    Send 'next-floor' $Instances[0]
+    Wait-All { param($s) $s[0].dungeonDepth -gt $depth -and !$s[0].transitioning -and $s[0].worldKey -ne '' -and $s[0].monstersTracked -gt 0 } 'Host on a fresh floor' | Out-Null
+}
 $hostKey = (State $Instances[0]).worldKey
 foreach ($instance in $Instances | Select-Object -Skip 1) {
     Send 'test-resume' $instance
