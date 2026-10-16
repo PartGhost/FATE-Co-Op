@@ -150,7 +150,7 @@ public sealed partial class Plugin
         var plugin = Active;
         if (plugin == null || !plugin.Connected) return true;
         var target = __instance.Char;
-        if (target == Player.PlayerChar && data.value > 0) plugin.lastCombatTime = Time.unscaledTime;
+        if (target == Player.PlayerChar && data.value > 0) plugin.lastCombatTime = plugin.lastHurtTime = Time.unscaledTime;
         var standIn = plugin.PartnerOf(target);
         if (plugin.OwnsWorld)
         {
@@ -281,7 +281,7 @@ public sealed partial class Plugin
         var plugin = Active;
         if (plugin == null || __instance != Player.PlayerChar) return;
         plugin.localSwings++;
-        plugin.lastCombatTime = Time.unscaledTime;
+        plugin.lastCombatTime = plugin.lastActionTime = Time.unscaledTime;
         plugin.localSwingSpeed = __instance.attackTimer;
     }
 
@@ -290,7 +290,7 @@ public sealed partial class Plugin
         var plugin = Active;
         if (plugin == null || __instance != Player.PlayerChar || __instance.activeSpell == null) return;
         plugin.localCasts++;
-        plugin.lastCombatTime = Time.unscaledTime;
+        plugin.lastCombatTime = plugin.lastActionTime = Time.unscaledTime;
         plugin.localCastSpell = __instance.activeSpell.spellName;
     }
 
@@ -315,7 +315,7 @@ public sealed partial class Plugin
         var objects = new List<GameObject>();
         generator.FillListWithActiveCharacters(ref objects);
         foreach (var obj in objects)
-            if (obj != null && obj.TryGetComponent<Monster>(out var monster) && monster.monsterData != null && monster != Player.PlayerChar.GetPet()) yield return monster;
+            if (obj != null && obj.TryGetComponent<Monster>(out var monster) && monster.monsterData != null && (!monster.HasMaster() || monster.GetAlignment() == Alignment.Evil)) yield return monster;
     }
 
     private int RegisterMonster(Monster monster)

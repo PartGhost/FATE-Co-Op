@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using Cleverous.VaultInventory;
 using HarmonyLib;
 using Steamworks;
 using Tableflip;
@@ -93,7 +94,7 @@ public sealed partial class Plugin
                 break;
             case "test-drop":
                 var dropper = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
-                var dropped = dropper.inventory.FirstOrDefault(item => item != null && !Fate.IsItemSlotInEquipmentSlot(item.slotIndex)) ?? throw new InvalidOperationException("Nothing in the bag to drop.");
+                var dropped = dropper.inventory.FirstOrDefault(item => item != null && !Fate.IsItemSlotInEquipmentSlot(item.slotIndex) && (parts.Length < 2 || item.itemName == parts[1])) ?? throw new InvalidOperationException("Nothing in the bag to drop.");
                 dropper.RemoveItemFromInventory(dropped, RemoveItemReason.Drop);
                 dropped.Drop(dropper.transform.position);
                 break;
@@ -101,6 +102,7 @@ public sealed partial class Plugin
                 var taker = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
                 var nearestItem = UnityEngine.Object.FindObjectsOfType<DroppedItem>().Where(d => d.Item != null).OrderBy(d => (d.transform.position - taker.transform.position).sqrMagnitude).FirstOrDefault()
                     ?? throw new InvalidOperationException("No item on the ground.");
+                if (!taker.CanFitItemInInventoryGrid(nearestItem.Item, out _)) throw new InvalidOperationException($"No room in the bag for {nearestItem.Item.itemName} ({nearestItem.Item.slotsTall}x{nearestItem.Item.slotsWide}).");
                 nearestItem.Interact(taker);
                 break;
             case "test-open":
@@ -242,6 +244,15 @@ public sealed partial class Plugin
                 if (Player.PlayerChar == null || near == null) throw new InvalidOperationException("No partner replica to walk to.");
                 Player.PlayerChar.GetComponent<NavMeshAgent>().Warp(near.transform.position + near.transform.right * 1.5f);
                 break;
+            case "test-npc":
+                var talker = Object.FindObjectsOfType<NpcVoiceLines>().First(voice => voice.thisNpc.ToString() == parts[1]);
+                Player.PlayerChar.GetComponent<NavMeshAgent>().Warp(talker.transform.position + talker.transform.forward * 2f);
+                talker.GetComponent<InteractableSceneObject>().Interact(Player.PlayerChar);
+                if (parts.Length > 2) AnswerPrompt(SingletonBehaviour<PromptUI>.Instance, true);
+                break;
+            case "test-warp":
+                Player.PlayerChar.GetComponent<NavMeshAgent>().Warp(new Vector3(float.Parse(parts[1], CultureInfo.InvariantCulture), Player.PlayerChar.transform.position.y, float.Parse(parts[2], CultureInfo.InvariantCulture)));
+                break;
             case "test-chat":
                 SendChat(string.Join(" ", parts, 1, parts.Length - 1));
                 break;
@@ -259,6 +270,39 @@ public sealed partial class Plugin
                 var bow = new Item(bowData);
                 if (!archer2.AddItemToInventory(bow, AddItemReason.Loot, MainHandSlot, desiredSlotIsGlobal: true)) throw new InvalidOperationException("Couldn't equip the bow.");
                 if (archer2.activeWeapon != bow) archer2.EquipItem(bow, archer2.GetActiveWeaponSet);
+                break;
+            case "test-tab":
+                ((UITabs)AccessTools.Field(typeof(PlayerUI), "uiTabs").GetValue(SimpleSingletonBehaviour<PlayerUI>.Instance)).SetTab((UITabs.TabType)Enum.Parse(typeof(UITabs.TabType), parts[1]));
+                break;
+            case "test-quest-scroll":
+                var questLog = Object.FindObjectOfType<QuestUI>();
+                UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(SideQuestRowsRef(questLog).Last(row => row.gameObject.activeSelf).questButton.gameObject);
+                break;
+            case "test-summon":
+                var summoner = Player.PlayerChar;
+                var summon = SingletonBehaviour<FateDB>.Instance.allSpells.First(s => s != null && s.IsSummonSpell());
+                summoner.activeSpell = summon;
+                summoner.mana = summoner.MaxMana();
+                summoner.TryCastCurrentSpell();
+                break;
+            case "test-unsummon":
+                foreach (var summoned in PetsRef(Player.PlayerChar).Where(c => c != null && c.IsSummoned()).ToList()) summoned.MyVitals.Die();
+                SaveData.RequestSave();
+                break;
+            case "test-spend":
+                var stat = (Tableflip.Attribute)Enum.Parse(typeof(Tableflip.Attribute), parts[1]);
+                for (var i = int.Parse(parts[2], CultureInfo.InvariantCulture); i > 0; i--) Player.PlayerChar.SpendPoint(stat);
+                break;
+            case "test-heavy":
+                var lifter = Player.PlayerChar;
+                var heavyData = SingletonBehaviour<FateDB>.Instance.AllItems.Find(i => i.ItemCategory == ItemCategory.Weapon && i.requirements != null
+                    && i.requirements.Any(r => r.attribute == Tableflip.Attribute.Strength && r.value > StartingStats[Tableflip.Attribute.Strength] && r.value <= lifter.attributes.Strength)
+                    && i.requirements.All(r => r.attribute == Tableflip.Attribute.Strength) && lifter.CanFitItemInInventoryGrid(new Item(i), out _)) ?? throw new InvalidOperationException("No weapon fits the current strength.");
+                var wielded = lifter.inventory.FirstOrDefault(i => i != null && i.slotIndex == MainHandSlot);
+                if (wielded != null) lifter.RemoveItemFromInventory(wielded, RemoveItemReason.Drop);
+                var heavy = new Item(heavyData);
+                if (!lifter.AddItemToInventory(heavy, AddItemReason.Loot, MainHandSlot, desiredSlotIsGlobal: true)) throw new InvalidOperationException("Couldn't equip the weapon.");
+                if (lifter.activeWeapon != heavy) lifter.EquipItem(heavy, lifter.GetActiveWeaponSet);
                 break;
             case "test-shift-heal":
                 var healer = Player.PlayerChar ?? throw new InvalidOperationException("No primary character.");
@@ -337,7 +381,7 @@ public sealed partial class Plugin
         var player = Player.PlayerChar;
         var partner = FirstPartner;
         var actor = partner?.Actor;
-        var pet = partner?.Pet;
+        var pet = partner?.Pet.Copy;
         var agent = actor != null ? actor.GetComponent<NavMeshAgent>() : null;
         var animator = actor != null ? actor.GetComponent<Animator>() : null;
         var telemetry = new Telemetry
@@ -355,7 +399,7 @@ public sealed partial class Plugin
             worldReady = worldReady, paused = Fate.isPaused, primaryAlive = player != null && player.Alive(),
             layoutHash = layoutHash, worldKey = CurrentWorldKey(),
             localPetCount = player != null ? player.GetPetCount() : 0,
-            remotePetActors = partners.Values.Count(p => p.Pet != null), remotePetModel = partner?.PetModel ?? "",
+            remotePetActors = partners.Values.Count(p => p.Pet.Copy != null), remotePetModel = partner?.Pet.Model ?? "",
             remotePetPosition = pet != null ? pet.transform.position : Vector3.zero,
             remoteName = partner?.Name ?? "", monstersTracked = monsters.Count, worldMonsters = Object.FindObjectsOfType<Monster>().Count(m => !m.IsPet() && PartnerOfPet(m) == null),
             aggro = aggroMonster == null ? "" : $"{aggroMonster.GetAIState()} target={(aggroMonster.Target() != null ? aggroMonster.Target().name : "none")}",
@@ -365,11 +409,18 @@ public sealed partial class Plugin
             lootGiven = lootGiven, lootTaken = lootTaken, questRewardsSent = questRewardsSent, questRewardsTaken = questRewardsTaken, effectsSent = effectsSent, effectsTaken = effectsTaken, damagePopups = damagePopups, spellsReplayed = spellsReplayed, arrowsDrawn = arrowsDrawn, levelUpsPlayed = levelUpsPlayed,
             remoteEffects = actor != null && shownEffects.TryGetValue(actor, out var actorEffects) ? string.Join(",", actorEffects) : "", mirrorEffects = shownEffects.Where(entry => entry.Key is Monster).Sum(entry => entry.Value.Count),
             replicaFishing = partner?.Fishing ?? 0, localFishing = LocalFishing(), cameraZoom = Cleverous.Prodigy.ProdigyCamera.Instance != null ? Cleverous.Prodigy.ProdigyCamera.Instance.GameCam.transform.localPosition.z : 0f, cameraYaw = Cleverous.Prodigy.ProdigyCamera.Instance != null ? Cleverous.Prodigy.ProdigyCamera.Instance.transform.eulerAngles.y : 0f,
-            localWeaponParticles = WeaponParticles(player), replicaWeaponParticles = WeaponParticles(actor), partyQuests = SingletonBehaviour<QuestManager>.InstanceExists() && Quests.HasLoaded && SideQuests.TryGetValue(QuestRealm, out var side) ? string.Join("\n", side.Where(q => q != null && q.Status != Quest.QuestStatus.None).Select(QuestTitle)) : "", dropsSent = dropsSent, bagItems = player != null ? player.inventory.Count : 0,
+            localWeaponParticles = WeaponParticles(player), replicaWeaponParticles = WeaponParticles(actor), partyQuests = SingletonBehaviour<QuestManager>.InstanceExists() && Quests.HasLoaded && SideQuests.TryGetValue(QuestRealm, out var side) ? string.Join("\n", side.Where(q => q != null && q.Status != Quest.QuestStatus.None).Select(QuestTitle)) : "", dropsSent = dropsSent, bagItems = player != null ? player.inventory.Count : 0, bagFreeCells = player != null ? Enumerable.Range(0, player.InventoryGridHeight * player.InventoryGridWidth).Count(cell => player.IsSpaceAvailable(cell / player.InventoryGridWidth, cell % player.InventoryGridWidth, 1, 1)) : 0,
             openChests = Object.FindObjectsOfType<ContainerInteractable>().Count(c => c.IsOpen), brokenBarrels = Object.FindObjectsOfType<ContainerDestroyable>().Count(b => b.IsDestroyed), primaryHp = player != null ? player.hp : 0f, primaryExperience = player != null ? (long)player.experience : 0,
             primaryOnNavMesh = player != null && player.GetComponent<NavMeshAgent>() != null && player.GetComponent<NavMeshAgent>().isOnNavMesh,
             gameScene = SceneLoad.CurrentScene.ToString(), followPrompt = followAnswer != null, inCombat = InCombat, partnerElsewhere = PartnersElsewhere().Any(), downed = downed, replicaDown = partner != null && partner.Down, reviveProgress = reviveProgress, chatReceived = chatReceived, lastChat = chatLines.Count > 0 ? chatLines[chatLines.Count - 1].line : "", fateChoice = SingletonBehaviour<FateChoiceUI>.InstanceExists() && FateChoiceUI.FateChoiceActive,
-            prototypeActors = partners.Values.Count(p => p.Actor != null), partnerTownPortals = partners.Values.Count(p => p.TownPortal != null), partnerPortals = partners.Values.Count(p => p.Portal != null), partnerPlates = partners.Values.Count(p => p.Plate != null), rangedRolls = rangedRolls, rangedMisses = rangedMisses, grazes = grazes, rangedEquipped = player != null && UsingRanged(player)
+            prototypeActors = partners.Values.Count(p => p.Actor != null), partnerTownPortals = partners.Values.Count(p => p.TownPortal != null), partnerPortals = partners.Values.Count(p => p.Portal != null), partnerPlates = partners.Values.Count(p => p.Plate != null), rangedRolls = rangedRolls, rangedMisses = rangedMisses, grazes = grazes, rangedEquipped = player != null && UsingRanged(player),
+            townNpcs = string.Join("; ", Object.FindObjectsOfType<NpcVoiceLines>().Select(voice => voice.thisNpc + (voice.TryGetComponent<Merchant>(out var shop) ? ":" + shop.inventory.Count : ""))),
+            mainHand = player != null ? player.inventory.FirstOrDefault(i => i != null && i.slotIndex == MainHandSlot)?.itemName ?? "" : "",
+            bleedOut = downed ? downedUntil - Time.unscaledTime : 0f, friendImpacts = friendImpacts, localSummons = LocalSummonSnapshots().Count,
+            partnerSummons = partners.Values.Sum(p => p.Summons.Count(s => s.Copy != null)),
+            mapOpenCells = SingletonBehaviour<MinimapFogGridUI>.InstanceExists() ? FogCellsRef(SingletonBehaviour<MinimapFogGridUI>.Instance)?.Count(open => open) ?? 0 : 0,
+            statPoints = player != null ? player.UnusedStatPoint : 0, gold = SingletonBehaviour<PlayerStatus>.InstanceExists() ? (long)SingletonBehaviour<PlayerStatus>.Instance.gold : 0,
+            dungeonFloors = SaveData.CurrentSaveData?.GetRealmSave(RealmData.RealmId.Grove)?.dungeonSave?.dungeons?.Count ?? 0
         };
         var json = JsonUtility.ToJson(telemetry);
         File.WriteAllText(Path.Combine(controlRoot, "status.json"), json);
@@ -385,6 +436,10 @@ public sealed partial class Plugin
         public bool guestOnNavMesh, guestWalking, guestRunning, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, ownsWorld, followPrompt, inCombat, partnerElsewhere, downed, replicaDown, fateChoice;
         public int remotePetActors, localPetCount, partnerTownPortals, partnerPortals, partnerPlates, rangedRolls, rangedMisses, grazes;
         public bool rangedEquipped;
+        public string townNpcs = "", mainHand = "";
+        public int statPoints, dungeonFloors, friendImpacts, localSummons, partnerSummons, mapOpenCells, bagFreeCells;
+        public float bleedOut;
+        public long gold;
         public int monstersTracked, worldMonsters, trackedHp, trackedDead, hitsSent, hitsApplied, strikesSent, strikesTaken, killsSent, killsTaken, swingsPlayed, castsPlayed, groundItems, lootGiven, lootTaken, questRewardsSent, questRewardsTaken, effectsSent, effectsTaken, damagePopups, spellsReplayed, arrowsDrawn, levelUpsPlayed, mirrorEffects, replicaFishing, localFishing, localWeaponParticles, replicaWeaponParticles, dropsSent, bagItems, openChests, brokenBarrels;
         public long primaryExperience;
     }

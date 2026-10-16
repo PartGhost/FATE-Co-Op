@@ -8,6 +8,7 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const float NearSound = 10f, FarSound = 30f;
+    private static readonly Vector3 Nowhere = Vector3.positiveInfinity;
     private Vector3? soundEmitter;
 
     private void InstallSoundHooks()
@@ -17,8 +18,11 @@ public sealed partial class Plugin
         foreach (var method in new[]
         {
             AccessTools.Method(typeof(Character), "PerformAttack"), AccessTools.Method(typeof(Character), "RollAttack"), AccessTools.Method(typeof(Character), "CompleteSpell"),
-            AccessTools.Method(typeof(ContainerDestroyable), "Destroyed"), AccessTools.Method(typeof(ContainerInteractable), "Interact"), AccessTools.Method(typeof(PartyMember), "PassOut")
+            AccessTools.Method(typeof(ContainerDestroyable), "Destroyed"), AccessTools.Method(typeof(ContainerInteractable), "Interact"), AccessTools.Method(typeof(PartyMember), "PassOut"),
+            AccessTools.Method(typeof(Character), "Attack"), AccessTools.Method(typeof(PartyMember), "Attack"), AccessTools.Method(typeof(Character), "UpdateTimers")
         }) harmony!.Patch(method, prefix: scoped, finalizer: unscoped);
+        harmony!.Patch(AccessTools.Method(typeof(Item), "Drop"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeDropSound)), finalizer: unscoped);
+        harmony.Patch(AccessTools.Method(typeof(Narrator), "PlayYourLine"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeNarratorLine)));
         var flat = new HarmonyMethod(typeof(Plugin), nameof(BeforeFlatSound));
         harmony!.Patch(AccessTools.Method(typeof(AudioManager), "PlayAudioClip", new[] { typeof(AudioData.AudioClipName), typeof(bool) }), prefix: flat);
         harmony.Patch(AccessTools.Method(typeof(AudioManager), "PlayAudioClip", new[] { typeof(AudioData.AudioClipName), typeof(float) }), prefix: flat);
@@ -38,20 +42,34 @@ public sealed partial class Plugin
         if (plugin != null && __instance != Player.PlayerChar) plugin.soundEmitter = __instance.transform.position;
     }
 
+    private static void BeforeDropSound(Vector3 worldPosStart, out Vector3? __state)
+    {
+        var plugin = Active;
+        __state = plugin?.soundEmitter;
+        if (plugin != null) plugin.soundEmitter = worldPosStart;
+    }
+
     private static Exception? AfterEmitterScope(Exception __exception, Vector3? __state)
     {
         if (Active != null) Active.soundEmitter = __state;
         return __exception;
     }
 
+    private static bool NearEmitter(out Vector3 emitter)
+    {
+        var source = Active?.soundEmitter;
+        emitter = source ?? Vector3.zero;
+        return source == null || Player.PlayerChar == null || (Player.PlayerChar.transform.position - emitter).sqrMagnitude <= NearSound * NearSound;
+    }
+
     private static bool BeforeFlatSound(AudioManager __instance, AudioData.AudioClipName clip)
     {
-        var emitter = Active?.soundEmitter;
-        var player = Player.PlayerChar;
-        if (emitter == null || player == null || (player.transform.position - emitter.Value).sqrMagnitude <= NearSound * NearSound) return true;
-        if (Audible(emitter.Value)) __instance.PlayAudioClipOnLocation(clip, emitter.Value);
+        if (NearEmitter(out var emitter)) return true;
+        if (Audible(emitter)) __instance.PlayAudioClipOnLocation(clip, emitter);
         return false;
     }
+
+    private static bool BeforeNarratorLine() => NearEmitter(out _);
 
     private static bool BeforePlacedSound(Vector3 position) => Audible(position);
 

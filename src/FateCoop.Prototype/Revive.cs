@@ -12,11 +12,11 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    private const float BleedOutSeconds = 30f, ReviveSeconds = 4f, ReviveRange = 3f, RevivedHealth = 0.25f;
+    private const float BleedOutSeconds = 30f, ReviveSeconds = 4f, ReviveRange = 3f, RevivedHealth = 0.25f, HurtPause = 0.75f;
     private static readonly MethodInfo VitalsDeadSetter = AccessTools.PropertySetter(typeof(CharacterVitals), "IsDead");
     private static readonly AccessTools.FieldRef<Character, Collider> ColliderRef = AccessTools.FieldRefAccess<Character, Collider>("myCollider");
     private bool downed, dyingForReal;
-    private float downedUntil, reviveStart = -1f, reviveProgress;
+    private float downedUntil, reviveProgress, reviveSince, lastHurtTime = float.NegativeInfinity, lastActionTime = float.NegativeInfinity;
     private int reviveTarget = Unassigned;
     private TargetBar? progressBar;
 
@@ -93,16 +93,22 @@ public sealed partial class Plugin
 
     private void UpdateRevive()
     {
-        if (downed && (Time.unscaledTime > downedUntil || !WorldPartners().Any(p => !PartnerDown(p)))) DieForReal();
         var player = Player.PlayerChar;
+        if (downed && player != null && WorldPartners().Any(p => !PartnerDown(p) && p.Actor != null && (p.Actor.transform.position - player.transform.position).sqrMagnitude <= ReviveRange * ReviveRange))
+            downedUntil += Time.unscaledDeltaTime;
+        if (downed && (Time.unscaledTime > downedUntil || !WorldPartners().Any(p => !PartnerDown(p)))) DieForReal();
         var target = downed || player == null || !player.Alive() ? null : WorldPartners().Where(p => PartnerDown(p) && p.Actor != null && (player.transform.position - p.Actor.transform.position).sqrMagnitude <= ReviveRange * ReviveRange)
             .OrderBy(p => (player.transform.position - p.Actor!.transform.position).sqrMagnitude).FirstOrDefault();
-        if (target == null || target.Id != reviveTarget || lastCombatTime > reviveStart) reviveStart = Time.unscaledTime;
+        if (target == null || target.Id != reviveTarget || lastActionTime > reviveSince)
+        {
+            reviveProgress = 0f;
+            reviveSince = Time.unscaledTime;
+        }
         reviveTarget = target?.Id ?? Unassigned;
-        reviveProgress = target == null ? 0f : (Time.unscaledTime - reviveStart) / ReviveSeconds;
+        if (target == null || Time.unscaledTime - lastHurtTime < HurtPause) return;
+        reviveProgress += Time.unscaledDeltaTime / ReviveSeconds;
         if (reviveProgress < 1f) return;
-        Send("revive", "", target!.Id, worldScoped: true);
-        reviveStart = Time.unscaledTime;
+        Send("revive", "", target.Id, worldScoped: true);
         reviveProgress = 0f;
     }
 

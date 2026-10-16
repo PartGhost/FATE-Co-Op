@@ -63,6 +63,8 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallPortalHooks();
             InstallSoundHooks();
             InstallRangedHooks();
+            InstallQuestLogHooks();
+            InstallTownNpcHooks();
             commandLineLobby = LobbyFromArguments(Environment.GetCommandLineArgs());
             SetStatus("Ready.");
             Snapshot();
@@ -86,12 +88,20 @@ public sealed partial class Plugin : BaseUnityPlugin
         respawn = StartCoroutine(SettleWorld());
     }
 
-    private void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene, LoadSceneMode mode) => Snapshot();
+    private void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene, LoadSceneMode mode)
+    {
+        if (borrowingNpcs && mode == LoadSceneMode.Additive) KeepBorrowedNpcs(scene);
+        Snapshot();
+    }
 
     private void OnGameSceneLoaded(Tableflip.Scene scene)
     {
         if (scene == Tableflip.Scene.MainMenu_Grove || scene == Tableflip.Scene.GameSelect || scene == Tableflip.Scene.Engagement) transitioning = false;
-        else if (scene == Tableflip.Scene.Town_Grove) SignalWorldReady();
+        else if (scene == Tableflip.Scene.Town_Grove)
+        {
+            SignalWorldReady();
+            FurnishTown();
+        }
         Snapshot();
     }
 

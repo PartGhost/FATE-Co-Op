@@ -14,6 +14,8 @@ public sealed partial class Plugin
 {
     private const float InterpolationDelay = 0.12f;
     private const string PlayerMarker = "P_Marker_Player";
+    private const int MaxSummons = 16;
+    private static readonly AccessTools.FieldRef<Character, List<Character>> PetsRef = AccessTools.FieldRefAccess<Character, List<Character>>("petCharacters");
     private static readonly AccessTools.FieldRef<Character, AIState> AIStateRef = AccessTools.FieldRefAccess<Character, AIState>("eAIState");
     private string sentProfileKey = "", localCastSpell = "";
     private float nextProfileCheck, localSwingSpeed;
@@ -27,14 +29,15 @@ public sealed partial class Plugin
         internal float LastMessage, ClockOffset;
         internal bool ClockSynced, Down;
         internal PartyMember? Actor;
-        internal Character? Pet;
-        internal string PetModel = "";
-        internal readonly PoseTrail Trail = new PoseTrail(), PetTrail = new PoseTrail();
+        internal readonly Companion Pet = new Companion();
+        internal readonly List<Companion> Summons = new List<Companion>();
+        internal readonly PoseTrail Trail = new PoseTrail();
         internal int Swings = -1, Casts = -1, Arrows = -1, LevelUps = -1, Spells = -1, Fishing;
         internal FishingPole? Pole;
         internal LineRenderer? ArrowLine;
         internal GameObject? Portal, TownPortal, Plate;
         internal RectTransform? HpFill, ManaFill, Arrow;
+        internal SpriteRenderer? MapIcon;
         internal PartyCharacterUI? Slot, PetSlot;
         internal Texture? Portrait;
 
@@ -59,6 +62,32 @@ public sealed partial class Plugin
             Slot = PetSlot = null;
             Arrow = null;
         }
+
+        internal void DespawnCompanions()
+        {
+            Pet.Despawn();
+            foreach (var summon in Summons) summon.Despawn();
+            Summons.Clear();
+        }
+    }
+
+    private sealed class Companion
+    {
+        internal Character? Copy;
+        internal string Model = "";
+        internal readonly PoseTrail Trail = new PoseTrail();
+
+        internal void Despawn()
+        {
+            if (Copy != null)
+            {
+                Copy.gameObject.SetActive(false);
+                Object.Destroy(Copy.gameObject);
+            }
+            Copy = null;
+            Model = "";
+            Trail.Clear();
+        }
     }
 
     [Serializable] private sealed class Profile
@@ -80,11 +109,12 @@ public sealed partial class Plugin
     private void InstallEntityHooks()
     {
         harmony!.Patch(AccessTools.Method(typeof(Pet), "UpdateAI"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePetAI)));
+        harmony.Patch(AccessTools.Method(typeof(Monster), "UpdateAI"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePetAI)));
         harmony.Patch(AccessTools.Method(typeof(PartyMember), "UpdateAI"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePartyAI)));
         harmony.Patch(AccessTools.Method(typeof(PartyMember), "RecoverFromPassOut"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePartyAI)));
     }
 
-    private static bool BeforePetAI(Pet __instance) => Active == null || Active.PartnerOfPet(__instance) == null;
+    private static bool BeforePetAI(Monster __instance) => Active == null || Active.PartnerOfPet(__instance) == null;
 
     private static bool BeforePartyAI(PartyMember __instance)
     {
@@ -95,18 +125,21 @@ public sealed partial class Plugin
 
     private Partner? PartnerOf(Character? character) => character == null ? null : partners.Values.FirstOrDefault(p => p.Actor == character);
 
-    private Partner? PartnerOfPet(Character? character) => character == null ? null : partners.Values.FirstOrDefault(p => p.Pet == character);
+    private Partner? PartnerOfPet(Character? character) => character == null ? null : partners.Values.FirstOrDefault(p => p.Pet.Copy == character || p.Summons.Any(s => s.Copy == character));
 
     private bool IsStandIn(Character? character) => PartnerOf(character) != null || PartnerOfPet(character) != null;
 
     private static bool LocalRunning() => Player.PlayerChar != null && Player.PlayerChar.Running();
 
-    private PetSnapshot LocalPetSnapshot()
-    {
-        var pet = Player.PlayerChar != null ? Player.PlayerChar.GetPet() : null;
-        if (pet == null || !pet.gameObject.activeInHierarchy || pet.monsterData == null) return new PetSnapshot();
-        return new PetSnapshot { present = true, model = pet.monsterData.displayName, name = pet.CharacterName ?? "Pet", position = pet.transform.position, yaw = pet.transform.eulerAngles.y, hp = pet.HP(), maxHp = pet.MaxHP() };
-    }
+    private static IEnumerable<Character> LocalCompanions() =>
+        Player.PlayerChar == null ? Enumerable.Empty<Character>() : PetsRef(Player.PlayerChar).Where(c => c != null && c.gameObject.activeInHierarchy && c.monsterData != null);
+
+    private static PetSnapshot Snapshot(Character pet) =>
+        new PetSnapshot { present = true, model = pet.monsterData.displayName, name = pet.CharacterName ?? "Pet", position = pet.transform.position, yaw = pet.transform.eulerAngles.y, hp = pet.HP(), maxHp = pet.MaxHP() };
+
+    private static PetSnapshot LocalPetSnapshot() => LocalCompanions().FirstOrDefault(c => c is Pet) is Character pet ? Snapshot(pet) : new PetSnapshot();
+
+    private static List<PetSnapshot> LocalSummonSnapshots() => LocalCompanions().Where(c => !(c is Pet)).Select(Snapshot).ToList();
 
     private void ApplyPeerFrame(Partner partner, PeerFrame frame)
     {
@@ -119,7 +152,8 @@ public sealed partial class Plugin
             if (partner.Actor == null) return;
         }
         partner.Trail.Add(frame.time, hit.position, frame.primaryYaw);
-        ApplyPartnerPet(partner, JsonUtility.FromJson<PetSnapshot>(frame.petJson), frame.time);
+        ApplyCompanion(partner, partner.Pet, JsonUtility.FromJson<PetSnapshot>(frame.petJson), frame.time);
+        ApplySummons(partner, frame.summonJson.Select(JsonUtility.FromJson<PetSnapshot>).ToList(), frame.time);
         if (partner.Swings >= 0 && frame.swings != partner.Swings) PlayReplicaSwing(partner, frame.swingSpeed);
         if (partner.Casts >= 0 && frame.casts != partner.Casts) PlayReplicaCast(partner, frame.castSpell);
         partner.Swings = frame.swings;
@@ -209,7 +243,7 @@ public sealed partial class Plugin
             Object.Destroy(partner.Actor.gameObject);
             Logger.LogInfo("DESPAWN_OK partner=" + partner.Id);
         }
-        DespawnPartnerPet(partner);
+        partner.DespawnCompanions();
         partner.Actor = null;
         partner.Trail.Clear();
         partner.Down = false;
@@ -241,22 +275,34 @@ public sealed partial class Plugin
         animator.SetBool("IsRunning", moving && running);
     }
 
-    private void ApplyPartnerPet(Partner partner, PetSnapshot pet, float time)
+    private void ApplySummons(Partner partner, List<PetSnapshot> summons, float time)
     {
-        if (pet == null || !pet.present) { DespawnPartnerPet(partner); return; }
-        if (!FinitePosition(pet.position) || !Finite(pet.yaw) || pet.model.Length > 128 || pet.name.Length > 64) throw new InvalidOperationException("Invalid pet state.");
-        if (!NavMesh.SamplePosition(pet.position, out var hit, 3f, NavMesh.AllAreas)) { DespawnPartnerPet(partner); return; }
-        if (partner.Pet == null || partner.PetModel != pet.model)
+        if (summons.Count > MaxSummons) throw new InvalidOperationException("Too many summons.");
+        while (partner.Summons.Count > summons.Count)
         {
-            DespawnPartnerPet(partner);
+            partner.Summons[partner.Summons.Count - 1].Despawn();
+            partner.Summons.RemoveAt(partner.Summons.Count - 1);
+        }
+        while (partner.Summons.Count < summons.Count) partner.Summons.Add(new Companion());
+        for (var i = 0; i < summons.Count; i++) ApplyCompanion(partner, partner.Summons[i], summons[i], time);
+    }
+
+    private void ApplyCompanion(Partner partner, Companion companion, PetSnapshot pet, float time)
+    {
+        if (pet == null || !pet.present) { companion.Despawn(); return; }
+        if (!FinitePosition(pet.position) || !Finite(pet.yaw) || pet.model.Length > 128 || pet.name.Length > 64) throw new InvalidOperationException("Invalid pet state.");
+        if (!NavMesh.SamplePosition(pet.position, out var hit, 3f, NavMesh.AllAreas)) { companion.Despawn(); return; }
+        if (companion.Copy == null || companion.Model != pet.model)
+        {
+            companion.Despawn();
             var data = SingletonBehaviour<FateDB>.Instance.allMonsters.FirstOrDefault(m => m != null && m.displayName == pet.model);
             if (data == null || data.modelPrefab == null) throw new InvalidOperationException("Partner pet model is unavailable: " + pet.model);
             var obj = Object.Instantiate(data.modelPrefab, hit.position, Quaternion.Euler(0, pet.yaw, 0));
             var copy = obj.GetComponent<Character>();
             if (copy == null) { Object.Destroy(obj); throw new InvalidOperationException("Pet prefab has no Character."); }
             obj.name = "FateCoop_Partner_Pet_" + partner.Id;
-            partner.Pet = copy;
-            partner.PetModel = pet.model;
+            companion.Copy = copy;
+            companion.Model = pet.model;
             copy.SetMasterCharacter(partner.Actor);
             copy.monsterData = data;
             copy.Init();
@@ -271,19 +317,7 @@ public sealed partial class Plugin
             foreach (var collider in obj.GetComponentsInChildren<Collider>()) collider.enabled = false;
             copy.SetPositionProper(hit.position);
         }
-        partner.PetTrail.Add(time, hit.position, pet.yaw);
-    }
-
-    private void DespawnPartnerPet(Partner partner)
-    {
-        if (partner.Pet != null)
-        {
-            partner.Pet.gameObject.SetActive(false);
-            Object.Destroy(partner.Pet.gameObject);
-        }
-        partner.Pet = null;
-        partner.PetModel = "";
-        partner.PetTrail.Clear();
+        companion.Trail.Add(time, hit.position, pet.yaw);
     }
 
     private void UpdateRemoteEntities()
@@ -292,7 +326,8 @@ public sealed partial class Plugin
         {
             var running = partner.Frame != null && partner.Frame.running;
             if (partner.Actor != null && !partner.Down && partner.Trail.Sample(partner.RenderTime, out var position, out var yaw, out var live)) MoveReplica(partner.Actor, position, yaw, live, running);
-            if (partner.Pet != null && partner.PetTrail.Sample(partner.RenderTime, out var petPosition, out var petYaw, out var petLive)) MoveReplica(partner.Pet, petPosition, petYaw, petLive, running);
+            foreach (var companion in partner.Summons.Prepend(partner.Pet))
+                if (companion.Copy != null && companion.Trail.Sample(partner.RenderTime, out var petPosition, out var petYaw, out var petLive)) MoveReplica(companion.Copy, petPosition, petYaw, petLive, running);
         }
         UpdateMirrors();
     }

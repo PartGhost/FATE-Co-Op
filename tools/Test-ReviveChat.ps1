@@ -31,6 +31,8 @@ Wait-Pair { param($a, $b) $b.downed -and $b.primaryHp -le 0 -and !$b.fateChoice 
 Write-Output 'Guest went down instead of dying; the host sees them lying on the floor.'
 Send 'test-near-partner'
 $reviving = Wait-Pair { param($a, $b) $a.reviveProgress -gt 0.4 -and $b.downed } 'Host reviving' 10
+Start-Sleep -Milliseconds 1500
+if ((State b).bleedOut -lt $reviving.b.bleedOut - 0.5) { throw 'The bleed-out timer kept running with a friend next to them.' }
 Send 'test-swing'
 $interrupted = Wait-Pair { param($a, $b) $a.reviveProgress -lt $reviving.a.reviveProgress -and $b.downed } 'Swing resetting the revive' 5
 Write-Output ('A swing reset the revive from ' + [Math]::Round($reviving.a.reviveProgress, 2) + ' to ' + [Math]::Round($interrupted.a.reviveProgress, 2) + '.')

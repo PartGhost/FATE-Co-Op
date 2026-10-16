@@ -11,7 +11,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.18.0";
+    internal const string Version = "0.19.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     internal const int HostId = 0;
     private const int Everyone = -1, Unassigned = -2;
@@ -42,6 +42,7 @@ public sealed partial class Plugin
         public bool running;
         public Vector3 arrowEnd, spellAim, portalPosition;
         public string petJson = "", castSpell = "", effects = "", spellName = "", portalWorld = "";
+        public List<string> summonJson = new List<string>();
     }
 
     private bool Connected => partners.Count > 0;
@@ -116,7 +117,7 @@ public sealed partial class Plugin
             primaryPosition = player != null ? player.transform.position : Vector3.zero, primaryYaw = player != null ? player.transform.eulerAngles.y : 0f, running = LocalRunning(),
             hp = player != null ? player.HP() : 0, maxHp = player != null ? player.MaxHP() : 0, mana = player != null ? player.Mana() : 0, maxMana = player != null ? player.MaxMana() : 0,
             level = player != null ? player.Level : 0, xpPercent = player != null ? player.GetPctToNextLevel() : 0f, depth = LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth() : 0,
-            petJson = JsonUtility.ToJson(LocalPetSnapshot()), swings = localSwings, swingSpeed = localSwingSpeed, casts = localCasts, castSpell = localCastSpell,
+            petJson = JsonUtility.ToJson(LocalPetSnapshot()), summonJson = LocalSummonSnapshots().Select(JsonUtility.ToJson).ToList(), swings = localSwings, swingSpeed = localSwingSpeed, casts = localCasts, castSpell = localCastSpell,
             effects = player != null ? ActiveEffectNames(player) : "", fishing = LocalFishing(), arrows = localArrows, arrowEnd = localArrowEnd, levelUps = CountLevelUps(),
             spells = localSpells, spellName = localSpellName, spellAim = localSpellAim, spellTarget = localSpellTarget, revive = reviveProgress, reviveTarget = reviveTarget, portalWorld = localPortalWorld, portalDepth = portal?.levelDepth ?? 0, portalPosition = portal?.dungeonPosition ?? Vector3.zero
         };
@@ -227,6 +228,7 @@ public sealed partial class Plugin
             case "use-ward": UseWard(envelope.body); break;
             case "revive": if (downed) StandUp(partner); break;
             case "chat": ReceiveChat(partner, envelope.body); break;
+            case "reset-dungeons": TakeDungeonReset(partner); break;
             case "mismatch": EndSession("Your friends run a different mod or game version (this game runs " + Compatibility + ")."); break;
             default: throw new InvalidOperationException("Unknown peer message: " + envelope.type);
         }

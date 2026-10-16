@@ -50,6 +50,11 @@ public sealed partial class Plugin
     {
         var plugin = Active;
         if (plugin == null) return true;
+        if (plugin.furnishing)
+        {
+            plugin.travelAfterBorrowing = () => SceneLoad.LoadAsync(sceneIndex, save, withLoadingScreen, onDone, fadeIn, fadeOut);
+            return false;
+        }
         var depth = sceneIndex == (int)Tableflip.Scene.Dungeon ? SaveData.CurrentSaveData.GetLatestDepth(RealmData.RealmId.Grove) : 0;
         if (depth > 0 && plugin.HoldTravel(depth, true, () => SceneLoad.LoadAsync(sceneIndex, save, withLoadingScreen, onDone, fadeIn, fadeOut))) return false;
         plugin.travelDepth = depth;

@@ -11,6 +11,7 @@ tools/dotnet-install.ps1
 artifacts/
 test-game/
 test-game-b/
+test-game-c/
 test-saves/
 bin/
 obj/

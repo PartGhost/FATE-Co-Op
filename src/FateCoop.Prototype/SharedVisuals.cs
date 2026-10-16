@@ -60,7 +60,8 @@ public sealed partial class Plugin
         plugin.localSpells++;
         plugin.localSpellName = spell.spellName;
         plugin.localSpellAim = targetPosition ?? (targetChar != null ? targetChar.transform.position : __instance.transform.position + __instance.transform.forward * 150f);
-        plugin.localSpellTarget = targetChar is Monster monster && plugin.monsterIds.TryGetValue(monster, out var id) ? id : plugin.PartnerOf(targetChar) is Partner target ? PlayerTarget(target.Id) : 0;
+        var aimed = spell == plugin.redirectSpell ? plugin.redirectTarget : targetChar;
+        plugin.localSpellTarget = aimed is Monster monster && plugin.monsterIds.TryGetValue(monster, out var id) ? id : plugin.PartnerOf(aimed) is Partner target ? PlayerTarget(target.Id) : 0;
     }
 
     private static void BeforeProjectileImpact(SpellProjectile __instance, out bool __state)
@@ -201,17 +202,39 @@ public sealed partial class Plugin
             : target < 0 && -target - 1 == myId ? Player.PlayerChar
             : target < 0 && partners.TryGetValue(-target - 1, out var aimed) ? aimed.Actor : null;
         var master = MasterRef(caster);
-        caster.mana = caster.MaxMana();
-        caster.stamina = caster.MaxStamina();
+        caster.mana = Mathf.Max(caster.MaxMana(), spell.manaCost);
+        caster.stamina = Mathf.Max(caster.MaxStamina(), spell.staminaCost);
         caster.SetTarget(targetChar);
         MasterRef(caster) = null!;
+        var onMe = targetChar == Player.PlayerChar && SelfTargets.Contains(spell.targetType);
+        if (onMe)
+        {
+            redirectTarget = Player.PlayerChar;
+            redirectSpell = spell;
+        }
         visualDepth++;
-        try { caster.CompleteSpell(aim, null, targetChar, null, spell); spellsReplayed++; }
+        try
+        {
+            caster.CompleteSpell(aim, null, targetChar, null, spell);
+            if (PartyTargets.Contains(spell.targetType)) Player.PlayerChar.SpawnImpactVfxForSpellOnSelf(spell, ImpactDuration(spell));
+            spellsReplayed++;
+        }
         finally
         {
             visualDepth--;
             MasterRef(caster) = master;
+            if (onMe)
+            {
+                redirectTarget = null;
+                redirectSpell = null;
+            }
         }
+    }
+
+    private static float ImpactDuration(SpellData spell)
+    {
+        var buff = spell.effects?.Count > 0 ? spell.effects[0].duration : 0;
+        return buff > 0 ? buff : spell.sfx?.Count > 0 ? spell.sfx[0].duration : 0f;
     }
 
     private void ShowReplicaFishing(Partner partner, int flags)

@@ -1,3 +1,19 @@
+# Grove co-op prototype — 0.19.0
+
+Fixes and requests from the 0.18 playtest.
+
+- **No quest limit.** `IsQuestLogFull` and `IsQuestLogFullActiveTownRealm` always say no, so you can take a quest from every giver (one per giver is the game's own rule). The side quest rows sit in a `ScrollRect` three rows tall; extra rows are clones of the first, and keyboard or gamepad selection scrolls the list to the selected row.
+- **Sounds.** Item drops and landings, armed monster and partner swings, summons expiring and narrator lines are scoped to where they happen. Quest accept and reward sounds the host plays on a guest's behalf are muted.
+- **Friend spell effects.** The replica's mana is raised to the spell's cost before a replay, so expensive spells (Greater Heal costs more than a replica's mana pool) now show. A friend's Shift heal or buff on you plays its impact on you instead of on them, and party spells play theirs on you.
+- **Revive.** Bleed-out stops counting while a friend who is up stands within revive range. Taking damage pauses the revive bar for 0.75 s instead of resetting it; the reviver swinging or casting still resets it.
+- **Map.** Friends' minimap icons draw above the fog and take the friend's color. Each friend reveals the fog around them on your map in real time. Minimap arrows and icons use one color per player: host red, then yellow, green, purple, blue and so on.
+- **Summons.** Friendly summons (anything with a master that isn't Evil) are left out of monster sync, so they can't be hit or killed by friends and don't award kills when they expire. Every player sends their own summons in the frame (`summonJson`, a list of JSON strings because Unity's serializer skips nested mod types) and the others show inert copies, like pets.
+- **New Grove NPCs.** The first Grove load each session loads Town_Ekbatan and Town_Temple_Fate2 additively, keeps the wanted NPCs (by `NpcVoiceLines.thisNpc`) in a hidden `DontDestroyOnLoad` cache, deactivates everything else before `Start` runs and unloads the scenes. While that happens, `RealmQuestGiver.OnEnable`, `DontDestroy.Awake`, `ProdigyCamera.Awake`, `ThatHurt.Awake` and `Game.Awake` are skipped so the borrowed scene can't touch quests or take over the camera and damage numbers.
+  - Gort, Xander, Omar and Lizmo replace the Grove merchant with the same job (Samwen, Gann Gar, Dell Arness, Getts) and keep that NPC's spot and patrol route.
+  - **Xerxes the Librarian** (by Jin the Seer) resets stat points for 100 gold per point. Points above the starting 25/20/25/10 come back as unspent points; equipped gear you no longer meet the requirements for goes to your bag, or to the ground if the bag is full.
+  - **Sullivan the Reaper** (by the dungeon gate) resets the dungeons for free: every saved Grove floor is deleted except one with an open town portal, so they generate again. The reset goes to everyone in the session.
+- `Test-MapAndSummons.ps1` covers a guest revealing the host's map, summons on both sides staying copies, a guest's heal showing on the host, and a reset reaching the guest. `Test-ReviveChat.ps1` checks the bleed-out timer holds while a friend is next to you. New test commands: `test-npc`, `test-warp`, `test-spend`, `test-heavy`, `test-summon`, `test-tab`, `test-quest-scroll`.
+
 # Grove co-op prototype — 0.18.0
 
 Fixes from the first 0.17 playtest.

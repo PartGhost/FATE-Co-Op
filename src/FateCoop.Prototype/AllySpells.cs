@@ -19,6 +19,7 @@ public sealed partial class Plugin
     private static bool Shareable(SpellData spell) => spell.effects == null || !spell.effects.Any(effect => effect != null && SelfOnlyEffects.Contains(effect.buffType));
     private Character? redirectTarget;
     private SpellData? redirectSpell;
+    private int friendImpacts;
 
     private void InstallAllySpellHooks()
     {
@@ -91,7 +92,8 @@ public sealed partial class Plugin
     private static bool BeforeSelfImpactVfx(Character __instance, SpellData chosenSpell, float duration)
     {
         var plugin = Active;
-        if (plugin?.redirectTarget == null || chosenSpell != plugin.redirectSpell || __instance != Player.PlayerChar) return true;
+        if (plugin != null && plugin.VisualOnly && __instance == Player.PlayerChar) plugin.friendImpacts++;
+        if (plugin?.redirectTarget == null || chosenSpell != plugin.redirectSpell || __instance == plugin.redirectTarget) return true;
         plugin.redirectTarget.SpawnImpactVfxForSpellOnSelf(chosenSpell, duration);
         return false;
     }

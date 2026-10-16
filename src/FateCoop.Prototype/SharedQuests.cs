@@ -201,7 +201,9 @@ public sealed partial class Plugin
         if (!isHost) return;
         var save = JsonUtility.FromJson<QuestSaveData>(body);
         if (save == null || string.IsNullOrEmpty(save.questgiver) || Quests.HasQuestFromGiver(save.questgiver)) return;
-        Quests.AcceptQuest(new Quest(save, RealmData.RealmId.Grove, isRealmQuest: false), save.questgiver);
+        soundEmitter = Nowhere;
+        try { Quests.AcceptQuest(new Quest(save, RealmData.RealmId.Grove, isRealmQuest: false), save.questgiver); }
+        finally { soundEmitter = null; }
     }
 
     private void TakeQuestCancel(string body)
@@ -220,8 +222,13 @@ public sealed partial class Plugin
         if (quest == null) return;
         Advance(quest, progress);
         claimRequester = partner.Id;
+        soundEmitter = Nowhere;
         try { Quests.ClaimRewards(progress.giver); }
-        finally { claimRequester = Unassigned; }
+        finally
+        {
+            claimRequester = Unassigned;
+            soundEmitter = null;
+        }
     }
 
     private static void BeforeClaimRewards(Quest __instance)
