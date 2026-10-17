@@ -11,7 +11,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.23.0";
+    internal const string Version = "0.24.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     internal const int HostId = 0;
     private const int Everyone = -1, Unassigned = -2;
@@ -38,7 +38,7 @@ public sealed partial class Plugin
     {
         public string worldKey = "", scene = "";
         public Vector3 primaryPosition = Vector3.zero;
-        public float primaryYaw = 0, swingSpeed = 0, xpPercent = 0, time = 0, revive = 0, dayPhase = AlwaysDay;
+        public float primaryYaw = 0, swingSpeed = 0, xpPercent = 0, time = 0, revive = 0, dayPhase = AlwaysDay, worldBorn;
         public int seq, owner, travelDepth, portalDepth, reviveTarget = Unassigned, dlcs;
         public int swings, casts, hp, maxHp, mana, maxMana, level, depth, fishing, arrows, levelUps, spells, spellTarget;
         public bool running;
@@ -116,7 +116,7 @@ public sealed partial class Plugin
         return new PeerFrame
         {
             seq = ++frameSeq, time = Time.unscaledTime, dlcs = ownedDlcs, dayPhase = LocalDayPhase(),
-            worldKey = SharedWorldReady() ? CurrentWorldKey() : "", owner = worldOwner, travelDepth = transitioning ? travelDepth : 0, scene = SceneLoad.CurrentScene.ToString(),
+            worldKey = SharedWorldReady() ? CurrentWorldKey() : "", worldBorn = worldBorn, owner = worldOwner, travelDepth = transitioning ? travelDepth : 0, scene = SceneLoad.CurrentScene.ToString(),
             primaryPosition = player != null ? player.transform.position : Vector3.zero, primaryYaw = player != null ? player.transform.eulerAngles.y : 0f, running = LocalRunning(),
             hp = player != null ? player.HP() : 0, maxHp = player != null ? player.MaxHP() : 0, mana = player != null ? player.Mana() : 0, maxMana = player != null ? player.MaxMana() : 0,
             level = player != null ? player.Level : 0, xpPercent = player != null ? player.GetPctToNextLevel() : 0f, depth = RunFloorHere(),
@@ -258,6 +258,8 @@ public sealed partial class Plugin
             case "use-ward": UseWard(envelope.body); break;
             case "revive": if (downed) StandUp(partner); break;
             case "chat": ReceiveChat(partner, envelope.body); break;
+            case "ping": Send("pong", envelope.body, partner.Id, reliable: false); break;
+            case "pong": TakePong(partner, envelope.body); break;
             case "reset-dungeons": TakeDungeonReset(partner); break;
             default: throw new InvalidOperationException("Unknown peer message: " + envelope.type);
         }

@@ -24,13 +24,19 @@ function Send-Until([string]$Command, [string]$Instance, [scriptblock]$Done, [st
 }
 function SameFloor($a, $b) { $a.gameScene -eq 'Dungeon' -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $b.monstersTracked -gt 0 -and $b.monstersTracked -eq $a.monstersTracked -and $b.worldMonsters -eq $a.worldMonsters }
 
-if ((State a).gameScene -eq 'Town_Grove') { Send 'enter-dungeon' }
+if ((State a).gameScene -eq 'Town_Grove') {
+    Send 'enter-dungeon'
+    Wait-Pair { param($a, $b) $a.gameScene -eq 'Dungeon' -and !$a.transitioning -and $a.worldKey -ne '' } 'Host on floor 1' | Out-Null
+    Send 'test-invincible on' 'a'
+}
 if ((State b).gameScene -eq 'Town_Grove') { Send 'enter-dungeon' 'b' }
 if ((State a).worldKey -ne (State b).worldKey) {
     Wait-Pair { param($a, $b) !$b.inCombat -and !$b.transitioning } 'Guest out of combat' 30 | Out-Null
     Send 'follow-partner' 'b'
 }
 $shared = Wait-Pair { param($a, $b) SameFloor $a $b } 'Shared floor'
+Send 'test-invincible on' 'a'
+Send 'test-invincible on' 'b'
 Write-Output ('Shared floor ' + $shared.a.dungeonDepth + ': ' + $shared.a.worldMonsters + ' monsters in each world.')
 
 Send 'leave' 'b'

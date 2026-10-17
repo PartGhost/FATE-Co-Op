@@ -31,8 +31,12 @@ foreach ($instance in @('a','b')) { if ((Read-State $instance).gameScene -eq 'Du
 $deadline = [DateTime]::UtcNow.AddSeconds(60)
 while ([DateTime]::UtcNow -lt $deadline -and @('a','b' | Where-Object { $s = Read-State $_; $s.gameScene -ne 'Town_Grove' -or $s.transitioning }).Count -gt 0) { Start-Sleep -Milliseconds 400 }
 Send 'enter-dungeon'
+$deadline = [DateTime]::UtcNow.AddSeconds(60)
+while ([DateTime]::UtcNow -lt $deadline -and !(Read-State 'a' | Where-Object { $_.gameScene -eq 'Dungeon' -and !$_.transitioning -and $_.worldKey -ne '' })) { Start-Sleep -Milliseconds 400 }
 Send 'enter-dungeon' 'b'
 $floor1 = Wait-Pair 1
+Send 'test-invincible on' 'a'
+Send 'test-invincible on' 'b'
 Write-Output 'Floor 1: matching maze cells, stairs, world identity and one guest each.'
 $movement = @()
 foreach ($instance in @('a','b')) {

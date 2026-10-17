@@ -33,6 +33,29 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(EnterPortal), nameof(EnterPortal.SetDestination)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterRunPortalDestination)));
         harmony.Patch(AccessTools.Method(typeof(TutorialStatus), nameof(TutorialStatus.TryGetContextualTip)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeRunStoryTip)));
         harmony.Patch(AccessTools.Method(typeof(QuestManager), nameof(QuestManager.ReachedTown)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterRunTownReached)));
+        harmony.Patch(AccessTools.Method(typeof(Quest), "GenerateObjective"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeSideQuestObjective)));
+        harmony.Patch(AccessTools.Method(typeof(QuestManager), "LoadSave"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterRunQuestsLoaded)));
+    }
+
+    private static int RunLength(RealmData.RealmId realm)
+    {
+        var index = RunSections.FindIndex(section => section.realm == realm);
+        return index + 1 < RunSections.Count ? RunSections[index + 1].offset - RunSections[index].offset : int.MaxValue;
+    }
+
+    private static void BeforeSideQuestObjective(Quest __instance, ref int depth)
+    {
+        if (__instance.realmQuestData == null && InRun(__instance.RealmId)) depth = Math.Min(depth, RunLength(__instance.RealmId) - StoryFloorSpread);
+    }
+
+    private static void AfterRunQuestsLoaded()
+    {
+        foreach (var quest in SideQuests.Values.Where(list => list != null).SelectMany(list => list).Where(quest => quest != null && InRun(quest.RealmId)))
+        {
+            var limit = RunLength(quest.RealmId);
+            foreach (var target in QuestMonsters(quest).Where(target => target.targetDepth > limit)) target.targetDepth = limit;
+            if (quest.questItem != null && quest.questItem.targetDepth > limit) quest.questItem.targetDepth = limit;
+        }
     }
 
     private static bool BeforeRunStoryTip(TutorialTipType tipType, ref string key, ref bool __result)

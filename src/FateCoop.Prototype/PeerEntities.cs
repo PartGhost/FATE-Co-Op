@@ -28,7 +28,7 @@ public sealed partial class Plugin
         internal string Name = "", ProfileJson = "";
         internal string? SlotPetPortrait;
         internal PeerFrame? Frame;
-        internal float LastMessage, ClockOffset;
+        internal float LastMessage, ClockOffset, Ping = -1f;
         internal bool ClockSynced, Down;
         internal PartyMember? Actor;
         internal readonly Companion Pet = new Companion();
@@ -202,10 +202,22 @@ public sealed partial class Plugin
         if (profile?.player == null || profile.name.Length == 0 || profile.name.Length > 64 || profile.equipment.Count > 20 || profile.equipment.Any(item => !Fate.IsItemSlotInEquipmentSlot(item.slotIndex)))
             throw new InvalidOperationException("Invalid partner profile.");
         if (partner.ProfileJson.Length == 0) Notify(profile.name + " joined the co-op game.");
+        var outfitChanged = partner.ProfileJson.Length == 0 || Outfit(JsonUtility.FromJson<Profile>(partner.ProfileJson)) != Outfit(profile);
         partner.ProfileJson = body;
         partner.Name = profile.name;
-        if (partner.Actor != null) Despawn(partner);
+        if (partner.Actor == null) return;
+        if (outfitChanged)
+        {
+            Despawn(partner);
+            return;
+        }
+        partner.Actor.SetLevel(Fate.GetLevelFromExperience(profile.player.experience));
+        buildingActor = true;
+        try { partner.Actor.SetActiveWeaponSet(profile.player.activeWeaponSet); }
+        finally { buildingActor = false; }
     }
+
+    private static string Outfit(Profile profile) => profile.name + JsonUtility.ToJson(new ItemStorage { items = profile.equipment });
 
     private void Spawn(Partner partner, Vector3 position)
     {

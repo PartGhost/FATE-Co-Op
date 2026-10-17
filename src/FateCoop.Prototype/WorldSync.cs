@@ -20,13 +20,14 @@ public sealed partial class Plugin
     private WorldSnapshot? pendingWorld, joiningWorld;
     private Action? heldTravel;
     private Vector3? arrivePoint;
-    private float heldUntil;
+    private float heldUntil, worldBorn;
     private bool heldGoesDown = true, replayingTravel;
 
     [Serializable] private sealed class WorldSnapshot
     {
-        public int version = 4;
+        public int version = 5;
         public RealmData.RealmId realm;
+        public float born;
         public string worldKey = "", layoutHash = "";
         public DungeonSaveData floor = null!;
         public List<int> monsterIds = new List<int>();
@@ -88,7 +89,7 @@ public sealed partial class Plugin
             heldDepth = 0;
             heldUntil = Time.unscaledTime + JoinWait;
         }
-        else if (partners.Values.Any(p => p.Id < myId && p.Frame != null && p.Frame.worldKey.Length == 0 && p.Frame.travelDepth == depth))
+        else if (partners.Values.Any(p => p.Frame != null && p.Frame.worldKey.Length == 0 && p.Frame.travelDepth == depth))
         {
             heldDepth = depth;
             heldUntil = Time.unscaledTime + ArrivalWait;
@@ -100,7 +101,7 @@ public sealed partial class Plugin
     }
 
     private PeerFrame? ReadyAt(int depth) => partners.Values.Select(p => p.Frame)
-        .Where(f => f != null && f.scene == Tableflip.Scene.Dungeon.ToString() && f.depth == depth && f.worldKey.Length > 0 && f.owner != myId).OrderBy(f => f!.owner).FirstOrDefault();
+        .Where(f => f != null && f.scene == Tableflip.Scene.Dungeon.ToString() && f.depth == depth && f.worldKey.Length > 0 && f.owner != myId).OrderBy(f => f!.worldBorn).ThenBy(f => f!.owner).FirstOrDefault();
 
     private void RequestWorld(PeerFrame target)
     {
@@ -176,6 +177,7 @@ public sealed partial class Plugin
             if (joiningWorld != null && layoutHash == joiningWorld.layoutHash)
             {
                 worldKey = joiningWorld.worldKey;
+                worldBorn = joiningWorld.born;
                 worldOwner = joiningOwner;
                 MatchMirrors(joiningWorld);
             }
@@ -183,6 +185,7 @@ public sealed partial class Plugin
             {
                 if (joiningWorld != null) Logger.LogError("FLOOR_LAYOUT_MISMATCH expected=" + joiningWorld.layoutHash + " actual=" + layoutHash);
                 worldKey = sessionId + ":" + worldEpoch + ":" + layoutHash;
+                worldBorn = SessionTime();
                 worldOwner = myId;
             }
         }
@@ -211,7 +214,7 @@ public sealed partial class Plugin
         generator.PreSaveTask(SaveData.CurrentSaveData);
         var realm = SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm;
         var floor = SaveData.CurrentSaveData.GetRealmSave(realm).GetDungeonSave(generator.GetLevelDepth());
-        return new WorldSnapshot { realm = realm, worldKey = CurrentWorldKey(), layoutHash = layoutHash, floor = floor, monsterIds = AssignExportIds(floor) };
+        return new WorldSnapshot { realm = realm, born = worldBorn, worldKey = CurrentWorldKey(), layoutHash = layoutHash, floor = floor, monsterIds = AssignExportIds(floor) };
     }
 
     private void SendWorldTo(Partner partner, string key)
@@ -236,7 +239,7 @@ public sealed partial class Plugin
     {
         if (Player.PlayerChar == null || Fate.CurrentFateVer != Fate.FateVer.Original)
             throw new InvalidOperationException("Joining requires a selected Original FATE character.");
-        if (snapshot.version != 4 || !InRun(snapshot.realm) || !RunRealmOpen(snapshot.realm) || snapshot.floor == null || snapshot.monsterIds.Count != snapshot.floor.monsters.Count || snapshot.floor.depth < 1 || snapshot.floor.depth > 10000
+        if (snapshot.version != 5 || !InRun(snapshot.realm) || !RunRealmOpen(snapshot.realm) || snapshot.floor == null || snapshot.monsterIds.Count != snapshot.floor.monsters.Count || snapshot.floor.depth < 1 || snapshot.floor.depth > 10000
             || snapshot.floor.templateIndex < 0 || snapshot.floor.templateIndex >= SingletonBehaviour<FateDB>.Instance.allTemplates.Length
             || snapshot.layoutHash.Length != 64 || snapshot.worldKey.Length > 128 || snapshot.worldKey.Length == 0)
             throw new InvalidOperationException("Incoming floor is invalid.");
@@ -274,10 +277,14 @@ public sealed partial class Plugin
         if (rival != Unassigned) { YieldOwnership(rival); return; }
         if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || WorldPartners().Any() || requestedWorld.Length > 0 || heldTravel != null) return;
         var depth = RunFloorHere();
-        var other = partners.Values.Select(p => p.Frame).Where(f => f != null && f.scene == Tableflip.Scene.Dungeon.ToString() && f.depth == depth && f.worldKey.Length > 0 && f.worldKey != key && f.owner < myId)
-            .OrderBy(f => f!.owner).FirstOrDefault();
+        var other = partners.Values.Select(p => p.Frame).Where(f => f != null && f.scene == Tableflip.Scene.Dungeon.ToString() && f.depth == depth && f.worldKey.Length > 0 && f.worldKey != key && OlderFloor(f))
+            .OrderBy(f => f!.worldBorn).ThenBy(f => f!.owner).FirstOrDefault();
         if (other != null) RequestWorld(other);
     }
+
+    private bool OlderFloor(PeerFrame frame) => frame.worldBorn < worldBorn || (frame.worldBorn == worldBorn && frame.owner < myId);
+
+    private float SessionTime() => Time.unscaledTime + (myId != HostId && partners.TryGetValue(HostId, out var host) ? host.ClockOffset : 0f);
 
     private void TakeOwnership()
     {

@@ -9,8 +9,8 @@ Online co-op for **FATE: Reawakened** (Original FATE, Grove) for 2 to 16 players
 - Shared dungeon floors: same monsters, same loot, same chests and barrels. Kills give XP to everyone on the floor.
 - Friends show with their Steam names, their looks, their gear and their pets, plus party portraits with health and mana.
 - Attacks, spells, effects, damage numbers, level-ups and fishing show for both players.
-- Shared quests in the real quest log: anyone's kills and quest items count, and everyone gets the reward.
-- Go where you like. Same floor (or town) means you play together, and joining a floor someone is already on never reloads it. When everyone leaves your floor you're asked if you want to follow, and "Go to Floor 9 (<name>)" in the Escape menu takes you next to them (not during a fight).
+- Shared quests in the real quest log: anyone can accept them, anyone's kills and quest items count, and everyone gets the reward.
+- Go where you like. Same floor (or town) means you play together, and whoever reaches a floor first keeps it: joining never reloads the player who got there first. When everyone leaves your floor you're asked if you want to follow, and "Go to Floor 9 (<name>)" in the Escape menu takes you next to them (not during a fight).
 - Revive: dying near a friend puts you down instead. A friend stands next to you for 4 seconds to get you up. After 30 seconds you die for real, but the clock stops while a friend is next to you.
 - Heal and buff friends: hold Shift while casting a self buff or heal to put it on the friend nearest your mouse, and party spells reach every friend on your floor. Buff spells last at least two and a half minutes. Town portals work for everyone, in the dungeon and in town, and look the same from both sides.
 - Bows and crossbows aim at your target and always land when it's in range; a shot that would have missed grazes for half damage.
@@ -55,6 +55,7 @@ Every install and update first backs up your saves to `Documents\FATE Co-Op save
 | Mouse wheel | Zoom |
 | Hold middle mouse | Turn the camera |
 | Enter | Chat (Enter sends, Escape cancels) |
+| F10 | Connection panel: each friend's ping and freezes on your side |
 | F11 | Hide the co-op overlays |
 
 `BepInEx\config\local.fatecoop.prototype.cfg` in the game folder has a few settings: lobby size, keyboard movement, camera turn speed, monster toughness and the length of a day in Grove (0 keeps it day).

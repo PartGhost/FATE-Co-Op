@@ -151,6 +151,33 @@ public sealed partial class Plugin
                 var offered = SingletonBehaviour<QuestManager>.Instance.GetQuestForQuestGiver(giver.CharacterName);
                 if (offered.Status == Quest.QuestStatus.None) SingletonBehaviour<QuestManager>.Instance.AcceptQuest(offered, giver.CharacterName);
                 break;
+            case "test-item-quest":
+                var seeker = UnityEngine.Object.FindObjectsOfType<QuestGiver>().OrderBy(g => g.CharacterName, StringComparer.Ordinal).ElementAt(int.Parse(parts[1], CultureInfo.InvariantCulture));
+                var findItem = new Quest(SingletonBehaviour<FateDB>.Instance.GetQuestDatas().First(data => data.questType == QuestData.QuestType.FindItem), RealmData.RealmId.Grove, seeker.CharacterName);
+                findItem.questItem.targetDepth = int.Parse(parts[2], CultureInfo.InvariantCulture);
+                SideQuests[QuestRealm].RemoveAll(q => q != null && q.QuestGiverName == seeker.CharacterName);
+                SideQuests[QuestRealm].Add(findItem);
+                SingletonBehaviour<QuestManager>.Instance.AcceptQuest(findItem, seeker.CharacterName);
+                SetStatus($"Item quest: {findItem.questItem.itemSaveData.ItemDisplayName} on floor {findItem.questItem.targetDepth}, ref {findItem.questItem.itemSaveData.refId}");
+                break;
+            case "test-quests":
+                SetStatus($"Quests in {SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm} depth {LevelGenerator.currentInstance?.GetLevelDepth()}: " + string.Join("; ", SingletonBehaviour<QuestManager>.Instance.GetQuests((int)SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm).Where(q => q != null)
+                    .Select(q => $"{q.QuestGiverName} {q.QuestType} {q.Status} item={q.questItem?.itemSaveData?.baseName}@{q.questItem?.targetRealm}:{q.questItem?.targetDepth}")));
+                break;
+            case "test-quest-item":
+                var finder = Player.PlayerChar;
+                bool wanted(Item item) => SideQuests[QuestRealm].Any(q => q?.questItem?.itemSaveData != null && q.questItem.itemSaveData.MatchesItem(item));
+                var lying = UnityEngine.Object.FindObjectsOfType<DroppedItem>().FirstOrDefault(d => d.Item != null && wanted(d.Item));
+                var chestSpot = parts.Length > 2 ? new Vector3(float.Parse(parts[1], CultureInfo.InvariantCulture), 0f, float.Parse(parts[2], CultureInfo.InvariantCulture)) : (Vector3?)null;
+                var holder = UnityEngine.Object.FindObjectsOfType<ContainerInteractable>().Where(c => !c.IsOpen).OrderBy(c => chestSpot.HasValue ? (c.transform.position - chestSpot.Value).sqrMagnitude : 0f).FirstOrDefault(c => chestSpot.HasValue || c.ContainedItems.Any(item => item != null && wanted(item)));
+                string fields(ItemSaveData d) => $"[{d.refId}|{d.baseName}|{d.uniqueNamePrefixKey1}|{d.uniqueNamePrefixKey2}|{d.namePrefix}|{d.nameSuffix}|{d.name}|q{d.isQuestItem}|u{d.unique}|a{d.artifact}]";
+                Component spot = lying != null ? lying : holder != null ? holder : throw new InvalidOperationException($"No quest item on this floor; lying {string.Join(" ", UnityEngine.Object.FindObjectsOfType<DroppedItem>().Where(d => d.Item != null).Select(d => fields(d.Item.GetItemSave())))}; wanted {string.Join(" ", SideQuests[QuestRealm].Where(q => q?.questItem?.itemSaveData != null).Select(q => fields(q.questItem.itemSaveData)))}");
+                if (parts.Length == 2) throw new InvalidOperationException($"Quest item {(lying != null ? "lying" : "in a chest")} at {spot.transform.position}");
+                finder.TeleportToPosition(spot.transform.position + Vector3.right);
+                if (lying != null) lying.Interact(finder);
+                else holder!.Interact(finder);
+                SetStatus($"Quest item {(lying != null ? "taken, ref " + lying.Item.refId : "chest opened")}; owned refs {string.Join(",", finder.inventory.Where(item => item != null && wanted(item)).Select(item => item.refId))}");
+                break;
             case "test-finish-quest":
                 var finished = SideQuests[QuestRealm].FirstOrDefault(q => q != null && (q.Status == Quest.QuestStatus.Accepted || q.Status == Quest.QuestStatus.Completed)) ?? throw new InvalidOperationException("No side quest to finish.");
                 finished.Status = Quest.QuestStatus.Completed;
@@ -323,6 +350,20 @@ public sealed partial class Plugin
             case "test-day":
                 dayOffset = ((float.Parse(parts[1], CultureInfo.InvariantCulture) - Time.realtimeSinceStartup / dayLengthSeconds) % 1f + 1f) % 1f;
                 break;
+            case "test-quest-depth":
+                var groveSave = SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove);
+                var savedDepth = groveSave.latestDungeonDepth;
+                groveSave.latestDungeonDepth = int.Parse(parts[1], CultureInfo.InvariantCulture);
+                var generated = SingletonBehaviour<FateDB>.Instance.GetQuestDatas().Select(data => new Quest(data, RealmData.RealmId.Grove, "test")).ToList();
+                groveSave.latestDungeonDepth = savedDepth;
+                var stale = generated[0];
+                foreach (var target in QuestMonsters(stale)) target.targetDepth = 99;
+                if (stale.questItem != null) stale.questItem.targetDepth = 99;
+                SideQuests[QuestRealm].Add(stale);
+                AfterRunQuestsLoaded();
+                SideQuests[QuestRealm].Remove(stale);
+                SetStatus($"Quest depths: new {string.Join(",", generated.Select(QuestDepth).Distinct().OrderBy(d => d))}, loaded {QuestDepth(stale)}");
+                break;
             case "test-dlcs":
                 ownedDlcs = int.Parse(parts[1], CultureInfo.InvariantCulture);
                 break;
@@ -349,6 +390,12 @@ public sealed partial class Plugin
                 var bow = new Item(bowData);
                 if (!archer2.AddItemToInventory(bow, AddItemReason.Loot, MainHandSlot, desiredSlotIsGlobal: true)) throw new InvalidOperationException("Couldn't equip the bow.");
                 if (archer2.activeWeapon != bow) archer2.EquipItem(bow, archer2.GetActiveWeaponSet);
+                break;
+            case "test-netstats":
+                showNetStats = !showNetStats;
+                break;
+            case "test-swap":
+                Player.PlayerChar.ToggleActiveWeaponSet();
                 break;
             case "test-tab":
                 ((UITabs)AccessTools.Field(typeof(PlayerUI), "uiTabs").GetValue(SimpleSingletonBehaviour<PlayerUI>.Instance)).SetTab((UITabs.TabType)Enum.Parse(typeof(UITabs.TabType), parts[1]));
@@ -655,6 +702,8 @@ public sealed partial class Plugin
         finally { quietScene = NoScene; }
     }
 
+    private static int QuestDepth(Quest quest) => QuestMonsters(quest).Select(target => target.targetDepth).Append(quest.questItem?.targetDepth ?? 0).Max();
+
     private static string PathOf(Transform node) => node.parent == null ? node.name : PathOf(node.parent) + "/" + node.name;
 
     private IEnumerator TestPrimaryWalk(Vector3 direction)
@@ -696,7 +745,9 @@ public sealed partial class Plugin
             dungeonRealm = SingletonBehaviour<PlayerStatus>.InstanceExists() ? SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm.ToString() : "",
             effectiveDepth = LevelGenerator.effectiveLevelDepth,
             runSections = string.Join(",", RunSections.Select(section => section.realm + ":" + section.offset)), dlcs = ownedDlcs,
-            dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
+            netStats = string.Join("\n", NetStatLines()), dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
+            mirroringQuests = MirroringQuests, sharedQuestsReceived = sharedQuestsJson.Length > 0,
+            giverQuests = string.Join(", ", Object.FindObjectsOfType<QuestGiver>().Where(giver => giver.Quest != null && giver.Quest.Status != Quest.QuestStatus.None).Select(giver => giver.CharacterName + ":" + giver.Quest.Status)),
             prompt = PromptUI.IsPromptActive ? PromptBodyRef(SingletonBehaviour<PromptUI>.Instance).text : "",
             itemDepth = LevelGenerator.currentInstance != null ? (int)ItemDepthGetter.Invoke(LevelGenerator.currentInstance, null) : 0,
             monsterLevels = string.Join(",", Object.FindObjectsOfType<Monster>().Where(m => !m.IsPet() && m.GetMonsterRank == Rank.Normal && !m.isUnique && PartnerOfPet(m) == null).Select(m => m.Level).OrderBy(level => level).Distinct()),
@@ -754,6 +805,8 @@ public sealed partial class Plugin
         public string dungeonRealm = "", monsterLevels = "", prompt = "", runSections = "";
         public int localDepth, effectiveDepth, itemDepth, dlcs;
         public float dayPhase, sunIntensity;
+        public bool mirroringQuests, sharedQuestsReceived;
+        public string giverQuests = "", netStats = "";
         public string townNpcs = "", mainHand = "", localPet = "", fixtures = "", template = "", vitals = "", bagCheck = "", partnerIcon = "", partnerPetPortrait = "", buffs = "";
         public int replicaImpacts, skillPoints;
         public int statPoints, dungeonFloors, friendImpacts, localSummons, partnerSummons, mapOpenCells, bagFreeCells;

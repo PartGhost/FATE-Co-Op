@@ -34,5 +34,21 @@ Start-Sleep -Seconds 3
 if ((State b).questRewardsTaken -ne $second.b.questRewardsTaken) { throw 'The guest got the reward twice.' }
 Write-Output 'Guest turned a shared quest in: the host''s copy was claimed too, both got the reward once.'
 
-[ordered]@{ passed = $true; town = $town; listed = $listed; rewarded = $rewarded; guestClaim = $guestClaim } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $workspace 'artifacts\shared-quests-verification.json')
+Send 'test-accept-quest 2' 'b'
+$guestAccept = Wait-Pair { param($a, $b) $a.giverQuests -match ':Accepted' -and $a.partyQuests -ne '' -and $b.partyQuests -eq $a.partyQuests } 'Guest accepting a quest'
+Send 'test-finish-quest only' 'b'
+$guestDone = Wait-Pair { param($a, $b) $a.giverQuests -match ':Completed' } 'Guest completing a quest'
+Send 'test-finish-quest' 'b'
+Wait-Pair { param($a, $b) $a.partyQuests -eq '' -and $b.partyQuests -eq '' } 'Guest turning in its own quest' | Out-Null
+Write-Output ('Guest accepted, completed and turned in a quest; the host saw each step (' + $guestAccept.a.giverQuests + ', then ' + $guestDone.a.giverQuests + ').')
+
+$groveEnd = [int](((State a).runSections -split ',')[1] -split ':')[1]
+Send 'test-quest-depth 60'
+Start-Sleep -Seconds 2
+if ((State a).status -notmatch 'new ([\d,]+), loaded (\d+)') { throw ('No quest depth report: ' + (State a).status) }
+$deepest = ($Matches[1] -split ',' | ForEach-Object { [int]$_ } | Measure-Object -Maximum).Maximum
+if ($deepest -gt $groveEnd -or [int]$Matches[2] -gt $groveEnd) { throw ('Grove side quests reach past the Grove: ' + (State a).status) }
+Write-Output ('Grove side quests stay on the Grove''s ' + $groveEnd + ' floors: ' + (State a).status)
+
+[ordered]@{ passed = $true; town = $town; listed = $listed; rewarded = $rewarded; guestClaim = $guestClaim; guestAccept = $guestAccept; guestDone = $guestDone } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $workspace 'artifacts\shared-quests-verification.json')
 Write-Output 'PASS: one shared quest list, rewards for everyone whoever turns the quest in.'

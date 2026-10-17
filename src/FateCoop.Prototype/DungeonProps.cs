@@ -98,7 +98,7 @@ public sealed partial class Plugin
     {
         var shards = CopyAsset(source);
         shards.transform.localScale *= size;
-        foreach (var renderer in shards.GetComponentsInChildren<Renderer>(true)) renderer.sharedMaterials = renderer.sharedMaterials.Select(_ => material).ToArray();
+        foreach (var renderer in shards.GetComponentsInChildren<Renderer>(true).Where(renderer => !(renderer is ParticleSystemRenderer))) renderer.sharedMaterials = renderer.sharedMaterials.Select(_ => material).ToArray();
         return shards;
     }
 

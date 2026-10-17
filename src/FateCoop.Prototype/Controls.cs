@@ -12,6 +12,8 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const float KeyboardStep = 1.5f;
+    private const string KeyboardScheme = "Keyboard";
+    private static readonly System.Reflection.MethodInfo InputBehaviorSetter = AccessTools.PropertySetter(typeof(InputBroker), nameof(InputBroker.LocalInputBehavior));
     private static readonly string[] CameraKeys = { "<Keyboard>/w", "<Keyboard>/s", "<Keyboard>/a", "<Keyboard>/d" };
     private static readonly AccessTools.FieldRef<InputBroker, NavMeshAgent> BrokerAgent = AccessTools.FieldRefAccess<InputBroker, NavMeshAgent>("m_navMeshAgent");
     private static readonly AccessTools.FieldRef<InputBroker, bool> BrokerMovementLocked = AccessTools.FieldRefAccess<InputBroker, bool>("movementLocked");
@@ -35,6 +37,24 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(InputBroker), "ReadPressedInputs"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterReadInputs)));
         harmony.Patch(AccessTools.Method(typeof(ProdigyCamera), "UpdateCameraRotation"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeCameraRotation)));
         harmony.Patch(AccessTools.Method(typeof(MiniMapIconUI), "LateUpdate"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterMinimapIcon)));
+        harmony.Patch(AccessTools.Method(typeof(InputBroker), "InputActionChangeCallback"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeInputModeCheck)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterInputModeCheck)));
+    }
+
+    private bool MovementBlocked => InputBlocker.AnyBlockingUiMenuIsOpen || InventoryUI.IsDraggingItem || downed;
+
+    private static void BeforeInputModeCheck(InputBroker __instance, out InputBroker.InputBehavior __state) => __state = __instance.LocalInputBehavior;
+
+    private static void AfterInputModeCheck(InputBroker __instance, object obj, InputBroker.InputBehavior __state)
+    {
+        if (__state == InputBroker.InputBehavior.Free || __instance.LocalInputBehavior != InputBroker.InputBehavior.Free || !(obj is InputAction { activeControl: { } control })) return;
+        Active?.Logger.LogWarning($"Controller mode switched on by {control.device.displayName} ({control.device.layout}, {control.path})");
+    }
+
+    private static void UseKeyboardControls(InputBroker broker)
+    {
+        InputBehaviorSetter.Invoke(broker, new object[] { InputBroker.InputBehavior.ClickToMove });
+        broker.Inputs.bindingMask = InputBinding.MaskByGroup(broker.Inputs.controlSchemes.First(scheme => scheme.name == KeyboardScheme).bindingGroup);
+        broker.OnInputBehaviorChanged?.Invoke(InputBroker.InputBehavior.ClickToMove);
     }
 
     private static void AfterMinimapIcon(MiniMapIconUI __instance)
@@ -62,6 +82,8 @@ public sealed partial class Plugin
                     if (CameraKeys.Contains(action.bindings[i].path)) action.ApplyBindingOverride(i, "");
             plugin.cameraKeysRemoved = true;
         }
+        var keyboard = Keyboard.current;
+        if (__instance.LocalInputBehavior == InputBroker.InputBehavior.Free && keyboard != null && keyboard.anyKey.wasPressedThisFrame) UseKeyboardControls(__instance);
         if (__instance.LocalInputBehavior == InputBroker.InputBehavior.ClickToMove) ZoomInputSetter.Invoke(__instance, new object[] { 0f });
     }
 
@@ -73,7 +95,7 @@ public sealed partial class Plugin
         if (plugin == null || player == null || agent == null || !agent.enabled || !agent.isOnNavMesh) return;
         var testing = plugin.testMove != Vector2.zero;
         var input = testing ? plugin.testMove : __instance.Inputs.Persistent.Move.ReadValue<Vector2>();
-        var allowed = input.sqrMagnitude > 0.01f && !InputBlocker.Blocked && __instance.ActiveInputMode == InputBroker.InputMode.Game && (testing || !BrokerMovementLocked(__instance))
+        var allowed = input.sqrMagnitude > 0.01f && !plugin.MovementBlocked && __instance.ActiveInputMode == InputBroker.InputMode.Game && (testing || !BrokerMovementLocked(__instance))
             && !player.PerformingAttack() && !player.PerformingCast() && !player.Fishing();
         if (!allowed)
         {
@@ -98,7 +120,7 @@ public sealed partial class Plugin
         var mouse = Mouse.current;
         if (plugin == null || mouse == null) return true;
         if (mouse.middleButton.wasPressedThisFrame) plugin.dragStart = mouse.position.ReadValue();
-        if (mouse.middleButton.isPressed && !InputBlocker.Blocked) plugin.cameraYaw += mouse.delta.ReadValue().x * plugin.cameraTurnSpeed;
+        if (mouse.middleButton.isPressed && !plugin.MovementBlocked) plugin.cameraYaw += mouse.delta.ReadValue().x * plugin.cameraTurnSpeed;
         plugin.cameraYaw += plugin.testTurn;
         if (mouse.middleButton.wasReleasedThisFrame) mouse.WarpCursorPosition(plugin.dragStart);
         var original = CameraOriginalRotation(__instance).eulerAngles;

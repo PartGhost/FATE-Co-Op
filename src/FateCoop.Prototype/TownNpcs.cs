@@ -117,7 +117,7 @@ public sealed partial class Plugin
             if (npcTemplates.ContainsKey(voice.thisNpc) || !BorrowedNpcs.Any(b => b.Npc == voice.thisNpc && (int)b.Home == scene.buildIndex)) continue;
             voice.gameObject.SetActive(false);
             voice.transform.SetParent(npcCache, true);
-            voice.transform.Find(NpcMarker).localPosition = Vector3.zero;
+            voice.transform.Cast<Transform>().First(child => child.name.StartsWith(NpcMarker, StringComparison.Ordinal)).localPosition = Vector3.zero;
             if (voice.TryGetComponent<RealmQuestGiver>(out var storyteller)) KeepRunStory(storyteller);
             npcTemplates[voice.thisNpc] = voice.gameObject;
         }

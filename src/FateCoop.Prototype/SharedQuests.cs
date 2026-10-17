@@ -15,6 +15,7 @@ public sealed partial class Plugin
     private const int QuestRealm = (int)RealmData.RealmId.Grove;
     private static readonly FieldInfo SideQuestsField = AccessTools.Field(typeof(QuestManager), "allSideQuests");
     private static readonly MethodInfo TargetCountSetter = AccessTools.PropertySetter(typeof(Quest), "TargetCount");
+    private static readonly AccessTools.FieldRef<LevelGenerator, List<DroppedItem>> DroppedItemsRef = AccessTools.FieldRefAccess<LevelGenerator, List<DroppedItem>>("droppedItems");
     private string sentQuests = "", sharedQuestsJson = "", reportedProgress = "";
     private List<Quest>? ownSideQuests;
     private float nextQuestSync;
@@ -35,7 +36,7 @@ public sealed partial class Plugin
 
     [Serializable] private sealed class ProgressList
     {
-        public List<QuestProgress> entries = new List<QuestProgress>();
+        public List<string> entries = new List<string>();
     }
 
     [Serializable] private sealed class QuestReward
@@ -52,6 +53,7 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(LevelGenerator), "ValidateQuestsPostLoad"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeQuestValidation)));
         harmony.Patch(AccessTools.Method(typeof(WardInteractable), "Interact"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeWardInteract)));
         harmony.Patch(AccessTools.Method(typeof(QuestManager), "LoadSave"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterQuestLoad)));
+        harmony.Patch(AccessTools.Method(typeof(Quest), "GenerateObjective"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterQuestObjective)));
         harmony.Patch(AccessTools.Method(typeof(QuestManager), "FlushSave"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeQuestSave)), finalizer: new HarmonyMethod(typeof(Plugin), nameof(AfterQuestSave)));
         harmony.Patch(AccessTools.Method(typeof(QuestManager), "AcceptQuest"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeAcceptQuest)));
         harmony.Patch(AccessTools.Method(typeof(QuestManager), "CancelQuest"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeCancelQuest)));
@@ -60,6 +62,14 @@ public sealed partial class Plugin
     }
 
     private static string QuestTitle(Quest quest) => string.Format(quest.QuestName, quest.QuestGiverDisplayName);
+
+    private static IEnumerable<Quest.MonsterTemplate> QuestMonsters(Quest quest) => new[] { quest.uniqueQuestMonster, quest.questWard }.Concat(quest.questMonsters ?? new List<Quest.MonsterTemplate>()).Where(target => target != null);
+
+    private static void AfterQuestObjective(Quest __instance)
+    {
+        foreach (var template in QuestMonsters(__instance).Select(monster => monster.targetItem).Append(__instance.questItem).Where(template => template?.itemSaveData != null))
+            template.itemSaveData = JsonUtility.FromJson<ItemSaveData>(JsonUtility.ToJson(template.itemSaveData));
+    }
 
     private static QuestManager Quests => SingletonBehaviour<QuestManager>.Instance;
 
@@ -113,7 +123,7 @@ public sealed partial class Plugin
         }
         if (!MirroringQuests) return;
         var shared = JsonUtility.FromJson<QuestList>(sharedQuestsJson).quests;
-        var ahead = SideQuests[QuestRealm].Where(q => q != null && shared.Any(s => s.questgiver == q.QuestGiverName && s.questId == q.QuestId && (q.TargetCount < s.targetCount || (q.Status == Quest.QuestStatus.Completed && s.status == Quest.QuestStatus.Accepted)))).Select(ProgressOf).ToList();
+        var ahead = SideQuests[QuestRealm].Where(q => q != null && shared.Any(s => s.questgiver == q.QuestGiverName && s.questId == q.QuestId && (q.TargetCount < s.targetCount || (q.Status == Quest.QuestStatus.Completed && s.status == Quest.QuestStatus.Accepted)))).Select(ProgressOf).Select(progress => JsonUtility.ToJson(progress)).ToList();
         var report = JsonUtility.ToJson(new ProgressList { entries = ahead });
         if (ahead.Count == 0 || report == reportedProgress) return;
         Send("quest-progress", report, HostId);
@@ -140,6 +150,20 @@ public sealed partial class Plugin
             foreach (var quest in mirror)
                 foreach (var local in current.Where(q => q != null)) Advance(quest, ProgressOf(local));
         side[QuestRealm] = mirror;
+        RefreshQuestViews();
+    }
+
+    private static void RefreshQuestViews()
+    {
+        var current = SideQuests.TryGetValue(QuestRealm, out var list) ? list : new List<Quest>();
+        foreach (var giver in UnityEngine.Object.FindObjectsOfType<QuestGiver>())
+        {
+            var listed = current.FirstOrDefault(q => q != null && q.QuestGiverName == giver.CharacterName);
+            if (listed != null ? giver.Quest != listed : giver.Quest != null && giver.Quest.Status != Quest.QuestStatus.None) giver.GenerateNewQuest();
+            else giver.SetIcon();
+        }
+        var log = UnityEngine.Object.FindObjectOfType<QuestUI>();
+        if (log != null && log.isActiveAndEnabled) BuildQuestLogMethod.Invoke(log, new object[] { QuestLogRealmRef(log) });
     }
 
     private void RestoreOwnQuests()
@@ -154,8 +178,9 @@ public sealed partial class Plugin
     {
         if (!isHost) return;
         var reported = JsonUtility.FromJson<ProgressList>(body) ?? throw new InvalidOperationException("Invalid quest progress.");
-        foreach (var entry in reported.entries)
+        foreach (var entry in reported.entries.Select(JsonUtility.FromJson<QuestProgress>))
             foreach (var quest in SideQuests[QuestRealm].Where(q => q != null)) Advance(quest, entry);
+        RefreshQuestViews();
     }
 
     private static void AfterQuestLoad()
@@ -179,10 +204,13 @@ public sealed partial class Plugin
         return __exception;
     }
 
-    private static void BeforeAcceptQuest(Quest quest)
+    private static void BeforeAcceptQuest(Quest quest, string questGiver)
     {
         var plugin = Active;
-        if (plugin != null && plugin.MirroringQuests) plugin.Send("quest-accept", JsonUtility.ToJson(ToSave(quest)), HostId);
+        if (plugin == null || !plugin.MirroringQuests) return;
+        var save = ToSave(quest);
+        save.questgiver = questGiver;
+        plugin.Send("quest-accept", JsonUtility.ToJson(save), HostId);
     }
 
     private static void BeforeCancelQuest(Quest quest)
@@ -208,6 +236,7 @@ public sealed partial class Plugin
         soundEmitter = Nowhere;
         try { Quests.AcceptQuest(new Quest(save, RealmData.RealmId.Grove, isRealmQuest: false), save.questgiver); }
         finally { soundEmitter = null; }
+        RefreshQuestViews();
     }
 
     private void TakeQuestCancel(string body)
@@ -216,6 +245,7 @@ public sealed partial class Plugin
         var progress = JsonUtility.FromJson<QuestProgress>(body);
         var quest = SideQuests[QuestRealm].FirstOrDefault(q => q != null && q.QuestGiverName == progress.giver && q.QuestId == progress.questId);
         if (quest != null) Quests.CancelQuest(quest);
+        RefreshQuestViews();
     }
 
     private void TakeQuestClaim(string body)
@@ -228,6 +258,7 @@ public sealed partial class Plugin
         soundEmitter = Nowhere;
         try { Quests.ClaimRewards(progress.giver); }
         finally { soundEmitter = null; }
+        RefreshQuestViews();
     }
 
     private static void BeforeClaimRewards(Quest __instance)
@@ -256,9 +287,10 @@ public sealed partial class Plugin
             || (townStash != null ? townStash.HasItem(targetItem, out _) : stored != null && stored.Any(item => item.MatchesOtherSave(targetItem)));
     }
 
-    private static bool BeforeQuestValidation()
+    private static bool BeforeQuestValidation(LevelGenerator __instance)
     {
         var plugin = Active;
+        DroppedItemsRef(__instance) ??= new List<DroppedItem>();
         if (plugin == null || (plugin.OwnsWorld && plugin.pendingWorld == null && plugin.joiningWorld == null)) return true;
         LevelGenerator.onQuestValidationComplete?.Invoke();
         return false;

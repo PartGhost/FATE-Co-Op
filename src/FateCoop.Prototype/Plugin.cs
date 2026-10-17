@@ -170,6 +170,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             UpdateNameplates();
             UpdateChat();
             UpdateDayNight();
+            UpdateNetStats(keyboard);
             if (keyboard != null && keyboard.f11Key.wasPressedThisFrame) showPanel = !showPanel;
             if (testTools) UpdateDevTools();
         }
@@ -193,6 +194,7 @@ public sealed partial class Plugin : BaseUnityPlugin
     {
         if (!enabled || !showPanel || PauseUI.IsShown || PromptUI.IsPromptActive) return;
         DrawChat(Screen.height - 20f);
+        DrawNetStats();
     }
 
     private void OnDestroy()
