@@ -49,6 +49,7 @@ Hit-Until 'c' { param($a, $b, $c) $b.hitsApplied -gt $handover[1].hitsApplied } 
 Wait-All { param($a, $b, $c) (Same $b $c) -and $b.trackedHp -lt $handover[1].trackedHp } 'Monster health after a hit on the new owner' | Out-Null
 Write-Output 'Hits now go to the new floor owner.'
 
+Wait-All { param($a, $b, $c) !$a.inCombat } 'Host out of combat' | Out-Null
 Send ('follow-partner ' + $handover[1].myId) 'a'
 $back = Wait-All { param($a, $b, $c) (Same $a $b) -and (Same $a $c) -and $a.worldOwner -eq $b.myId -and $b.ownsWorld -and $a.prototypeActors -eq 2 } 'Host joining the new owner''s floor' 90
 Write-Output ('Host came back and joined player ' + $back[1].myId + '''s floor; all three are together again.')

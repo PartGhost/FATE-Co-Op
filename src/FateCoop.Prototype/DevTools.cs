@@ -299,6 +299,30 @@ public sealed partial class Plugin
                 rows.Add("       x from " + area[0] + " to " + area[2]);
                 File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), rows);
                 break;
+            case "test-lighting":
+                var renderers = Object.FindObjectsOfType<Renderer>();
+                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), new[]
+                {
+                    $"LIGHTMAPS {LightmapSettings.lightmaps.Length} | renderers using them {renderers.Count(r => r.lightmapIndex >= 0 && r.lightmapIndex < 65534)}/{renderers.Length}",
+                    $"AMBIENT {RenderSettings.ambientMode} sky={RenderSettings.ambientSkyColor} equator={RenderSettings.ambientEquatorColor} ground={RenderSettings.ambientGroundColor} flat={RenderSettings.ambientLight} intensity={RenderSettings.ambientIntensity}",
+                    $"FOG {RenderSettings.fog} {RenderSettings.fogMode} color={RenderSettings.fogColor} start={RenderSettings.fogStartDistance} end={RenderSettings.fogEndDistance} density={RenderSettings.fogDensity} skybox={(RenderSettings.skybox != null ? RenderSettings.skybox.name : "-")} sun={(RenderSettings.sun != null ? RenderSettings.sun.name : "-")}"
+                }.Concat(Object.FindObjectsOfType<Light>(true).Select(light =>
+                    $"LIGHT {PathOf(light.transform)} | {light.type} | on={light.isActiveAndEnabled} | baked={light.bakingOutput.lightmapBakeType} isBaked={light.bakingOutput.isBaked} | intensity={light.intensity} range={light.range} color={light.color} | shadows={light.shadows} | scene={light.gameObject.scene.name}")));
+                break;
+            case "test-materials":
+                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), Object.FindObjectsOfType<Renderer>().Where(r => PathOf(r.transform).IndexOf(parts[1], StringComparison.OrdinalIgnoreCase) >= 0).Take(10).SelectMany(r => new[] { "RENDERER " + PathOf(r.transform) }
+                    .Concat(r.sharedMaterials.Where(m => m != null).SelectMany(m => new[] { $"  MATERIAL {m.name} | shader={m.shader.name} | queue={m.renderQueue} | keywords={string.Join(",", m.shaderKeywords)}" }
+                        .Concat(Enumerable.Range(0, m.shader.GetPropertyCount()).Select(i => (name: m.shader.GetPropertyName(i), type: m.shader.GetPropertyType(i))).Select(p => p.type switch
+                        {
+                            UnityEngine.Rendering.ShaderPropertyType.Color => $"    {p.name} = {m.GetColor(p.name)}",
+                            UnityEngine.Rendering.ShaderPropertyType.Float or UnityEngine.Rendering.ShaderPropertyType.Range => $"    {p.name} = {m.GetFloat(p.name)}",
+                            UnityEngine.Rendering.ShaderPropertyType.Vector => $"    {p.name} = {m.GetVector(p.name)}",
+                            _ => $"    {p.name} : {p.type} {(m.GetTexture(p.name) != null ? m.GetTexture(p.name).name : "-")}"
+                        }))))));
+                break;
+            case "test-day":
+                dayOffset = ((float.Parse(parts[1], CultureInfo.InvariantCulture) - Time.realtimeSinceStartup / dayLengthSeconds) % 1f + 1f) % 1f;
+                break;
             case "test-dlcs":
                 ownedDlcs = int.Parse(parts[1], CultureInfo.InvariantCulture);
                 break;
@@ -672,6 +696,7 @@ public sealed partial class Plugin
             dungeonRealm = SingletonBehaviour<PlayerStatus>.InstanceExists() ? SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm.ToString() : "",
             effectiveDepth = LevelGenerator.effectiveLevelDepth,
             runSections = string.Join(",", RunSections.Select(section => section.realm + ":" + section.offset)), dlcs = ownedDlcs,
+            dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
             prompt = PromptUI.IsPromptActive ? PromptBodyRef(SingletonBehaviour<PromptUI>.Instance).text : "",
             itemDepth = LevelGenerator.currentInstance != null ? (int)ItemDepthGetter.Invoke(LevelGenerator.currentInstance, null) : 0,
             monsterLevels = string.Join(",", Object.FindObjectsOfType<Monster>().Where(m => !m.IsPet() && m.GetMonsterRank == Rank.Normal && !m.isUnique && PartnerOfPet(m) == null).Select(m => m.Level).OrderBy(level => level).Distinct()),
@@ -728,6 +753,7 @@ public sealed partial class Plugin
         public bool rangedEquipped;
         public string dungeonRealm = "", monsterLevels = "", prompt = "", runSections = "";
         public int localDepth, effectiveDepth, itemDepth, dlcs;
+        public float dayPhase, sunIntensity;
         public string townNpcs = "", mainHand = "", localPet = "", fixtures = "", template = "", vitals = "", bagCheck = "", partnerIcon = "", partnerPetPortrait = "", buffs = "";
         public int replicaImpacts, skillPoints;
         public int statPoints, dungeonFloors, friendImpacts, localSummons, partnerSummons, mapOpenCells, bagFreeCells;

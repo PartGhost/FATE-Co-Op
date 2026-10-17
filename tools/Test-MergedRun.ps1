@@ -117,4 +117,6 @@ if ($return.a.dungeonRealm -ne 'Druantia' -or $return.a.localDepth -ne 2) { thro
 Write-Output 'A town portal from Druantia 2 opens in Grove (one portal there) and leads back to Druantia 2.'
 
 Send 'test-resume'; Send 'test-resume' 'b'
+Send 'town'; Send 'town' 'b'
+Wait-Until { param($a, $b) $a.gameScene -eq 'Town_Grove' -and $b.gameScene -eq 'Town_Grove' -and (Settled $a) -and (Settled $b) } 'Both back in Grove' | Out-Null
 Write-Output 'PASS: the Grove, Undiscovered Realms, the Chamber of Trials, The Cursed King and Prometheus (for owners) form one run with carried depth, for one player and two.'

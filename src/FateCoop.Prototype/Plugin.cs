@@ -36,6 +36,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             testTools = Config.Bind("Development", "TestTools", false, "Command files and status telemetry for the automated tests.").Value;
             monsterToughness = Math.Max(1f, Config.Bind("Co-op", "MonsterToughness", 1.75f, "How much tougher monsters get for each extra player on the floor. 1 is the same as solo.").Value);
             playerCount = Config.Bind("Co-op", "Players", 2, new ConfigDescription("Lobby size when hosting. Change it with the arrows in Host co-op.", new AcceptableValueRange<int>(MinPlayers, MaxPlayers)));
+            dayLengthSeconds = Math.Max(0f, Config.Bind("Grove", "DayLengthMinutes", 20f, "Minutes for one day and night in Grove. In co-op everyone follows the host's clock. 0 keeps it day.").Value) * 60f;
             if (testTools)
             {
                 var game = Path.GetFullPath(Paths.GameRootPath);
@@ -108,6 +109,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         if (scene == Tableflip.Scene.MainMenu_Grove || scene == Tableflip.Scene.GameSelect || scene == Tableflip.Scene.Engagement) transitioning = false;
         else if (scene == Tableflip.Scene.Town_Grove)
         {
+            CaptureGroveDay();
             SignalWorldReady();
             FurnishTown();
         }
@@ -167,6 +169,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             UpdatePartnerHud();
             UpdateNameplates();
             UpdateChat();
+            UpdateDayNight();
             if (keyboard != null && keyboard.f11Key.wasPressedThisFrame) showPanel = !showPanel;
             if (testTools) UpdateDevTools();
         }

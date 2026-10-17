@@ -17,7 +17,7 @@ foreach ($instance in $Instances) {
     if (!(Get-Process -Name FateReawakened -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path (Get-TestGamePath $instance) 'FateReawakened.exe') })) { throw ('Test game ' + $instance + ' is not running.') }
 }
 $hostState = State $Instances[0]
-if ($hostState.gameScene -ne 'Dungeon' -or !$hostState.ownsWorld) {
+if ($hostState.gameScene -ne 'Dungeon' -or !$hostState.ownsWorld -or $hostState.dungeonRealm -ne 'Grove') {
     foreach ($instance in $Instances) { if ((State $instance).gameScene -eq 'Dungeon') { Send 'town' $instance } }
     Wait-All { param($s) @($s | Where-Object { $_.gameScene -ne 'Town_Grove' -or $_.transitioning }).Count -eq 0 } 'Everyone in town' | Out-Null
     Send 'enter-dungeon' $Instances[0]
