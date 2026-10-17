@@ -30,16 +30,15 @@ public sealed partial class Plugin
 
     private static PortalSaveData? PortalEntry()
     {
-        var save = SaveData.CurrentSaveData?.GetRealmSave(Fate.GetDungeonTownRealm(RealmData.RealmId.Grove))?.portalSave?.portalSaves;
-        var entry = save?.Find(s => s.dungeonRealm == RealmData.RealmId.Grove);
-        return entry != null && entry.levelDepth > 0 ? entry : null;
+        var save = SaveData.CurrentSaveData?.GetRealmSave(RunSections[0].realm)?.portalSave?.portalSaves;
+        return save?.Find(s => InRun(s.dungeonRealm) && s.levelDepth > 0);
     }
 
     private void TrackLocalPortal()
     {
         var entry = PortalEntry();
         if (entry == null) { localPortalWorld = ""; return; }
-        if (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && LevelGenerator.currentInstance != null && LevelGenerator.currentInstance.GetLevelDepth() == entry.levelDepth && CurrentWorldKey().Length > 0)
+        if (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && RunFloorHere() == RunFloor(entry.dungeonRealm, entry.levelDepth) && CurrentWorldKey().Length > 0)
             localPortalWorld = CurrentWorldKey();
     }
 
@@ -53,7 +52,7 @@ public sealed partial class Plugin
         if (partner.TownPortal == null) return;
         var portal = partner.TownPortal.GetComponent<EnterPortal>();
         portal.destinationRealm = RealmData.RealmId.Grove;
-        InteractableNameSetter.Invoke(portal, new object[] { partner.Name + ": Floor " + frame!.portalDepth });
+        InteractableNameSetter.Invoke(portal, new object[] { partner.Name + ": " + RunFloorName(frame!.portalDepth) });
         portal.onDestinationSet?.Invoke();
     }
 
@@ -84,15 +83,15 @@ public sealed partial class Plugin
         var plugin = Active;
         var partner = plugin?.partners.Values.FirstOrDefault(p => p.TownPortal != null && p.TownPortal == __instance.gameObject);
         if (partner?.Frame == null) return true;
-        var depth = partner.Frame.portalDepth;
+        var runFloor = partner.Frame.portalDepth;
         var arrival = partner.Frame.portalPosition;
-        SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw("Go through " + partner.Name + "'s portal to Floor " + depth + "?", yes =>
+        SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw("Go through " + partner.Name + "'s portal to " + RunFloorName(runFloor) + "?", yes =>
         {
             if (!yes) return;
             plugin!.arrivePoint = arrival;
             Player.isEnteringDungeonFromTownDoor = true;
-            SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm = RealmData.RealmId.Grove;
-            SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).SetLastVisitedDungeonDepth(depth);
+            var (realm, depth) = RunPlace(runFloor);
+            EnterFloorFromTown(realm, depth);
             SceneLoad.LoadAsync(Tableflip.Scene.Dungeon, true);
         }, twoButtons: true, "Yes", "No");
         return false;

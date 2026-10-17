@@ -25,7 +25,7 @@ public sealed partial class Plugin
     {
         if (transitioning || Player.PlayerChar == null) return "";
         if (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove) return TownPlace;
-        return SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth().ToString(CultureInfo.InvariantCulture) : "";
+        return SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && LevelGenerator.currentInstance != null ? RunFloorHere().ToString(CultureInfo.InvariantCulture) : "";
     }
 
     private static string PartnerPlace(PeerFrame? frame)
@@ -35,7 +35,7 @@ public sealed partial class Plugin
         return frame.scene == Tableflip.Scene.Dungeon.ToString() && frame.depth > 0 ? frame.depth.ToString(CultureInfo.InvariantCulture) : "";
     }
 
-    private static string DescribePlace(string place) => place == TownPlace ? "Grove town" : "Floor " + place;
+    private static string DescribePlace(string place) => place == TownPlace ? "Grove town" : RunFloorName(int.Parse(place, CultureInfo.InvariantCulture));
 
     private IEnumerable<Partner> PartnersElsewhere()
     {
@@ -106,19 +106,19 @@ public sealed partial class Plugin
         SceneLoad.LoadAsync(Tableflip.Scene.Town_Grove, true);
     }
 
-    private void TravelToFloor(int depth)
+    private void TravelToFloor(int runFloor)
     {
         if (transitioning) throw new InvalidOperationException("Wait for the current trip to finish.");
         Player.latestStairsUsedWasDown = true;
+        var (realm, depth) = RunPlace(runFloor);
         if (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && LevelGenerator.currentInstance != null)
         {
-            LevelGenerator.currentInstance.ReplaceDungeon(0, 0, depth, (int)RealmData.RealmId.Grove, true, false);
+            LevelGenerator.currentInstance.ReplaceDungeon(0, 0, depth, (int)realm, true, false);
             return;
         }
         if (SceneLoad.CurrentScene != Tableflip.Scene.Town_Grove) throw new InvalidOperationException("Travel starts in Grove or the dungeon.");
         Player.isEnteringDungeonFromTownDoor = true;
-        SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm = RealmData.RealmId.Grove;
-        SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).SetLastVisitedDungeonDepth(depth);
+        EnterFloorFromTown(realm, depth);
         SceneLoad.LoadAsync(Tableflip.Scene.Dungeon, true);
     }
 

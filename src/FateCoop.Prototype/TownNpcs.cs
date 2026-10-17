@@ -23,7 +23,10 @@ public sealed partial class Plugin
     {
         (NpcGreetings.Gort, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.Xander, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.Omar, Tableflip.Scene.Town_Ekbatan),
         (NpcGreetings.LizmotheTraveler, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.XerxestheLibrarian, Tableflip.Scene.Town_Ekbatan),
-        (NpcGreetings.SakinathePriestess, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.SullivantheReaper, Tableflip.Scene.Town_Temple_Fate2)
+        (NpcGreetings.SakinathePriestess, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.SullivantheReaper, Tableflip.Scene.Town_Temple_Fate2),
+        (NpcGreetings.Twigger, Tableflip.Scene.Town_Temple_Fate2), (NpcGreetings.Cyrus, Tableflip.Scene.Town_Temple_Fate2), (NpcGreetings.Malkondra, Tableflip.Scene.Town_Temple),
+        (NpcGreetings.AwadjitheHermitSage, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.KuroshtheBeggarKing, Tableflip.Scene.Town_Ekbatan),
+        (NpcGreetings.Alethe, Tableflip.Scene.Town_Prometheus)
     };
     private static readonly Dictionary<Tableflip.Attribute, int> StartingStats = new Dictionary<Tableflip.Attribute, int>
     {
@@ -31,19 +34,28 @@ public sealed partial class Plugin
     };
     private static readonly Dictionary<Tableflip.Attribute, int> StartingSkills = Enumerable.Range((int)Tableflip.Attribute.SkillSword, Tableflip.Attribute.SkillCharmMagic - Tableflip.Attribute.SkillSword + 1)
         .ToDictionary(skill => (Tableflip.Attribute)skill, _ => 0);
-    private static readonly (NpcGreetings Npc, Vector3 Spot, float Yaw, Action<Plugin> Offer)[] TownServices =
+    private static readonly (NpcGreetings Npc, Vector3 Spot, float Yaw, Action<Plugin>? Offer)[] GroveNpcs =
     {
         (NpcGreetings.XerxestheLibrarian, new Vector3(-7f, 0f, 7f), 142f, plugin => OfferRespec(StartingStats, "stat", (player, points) => player.AddUnusedStatPoints(points))),
         (NpcGreetings.SakinathePriestess, new Vector3(-9.5f, 0f, 9f), 142f, plugin => OfferRespec(StartingSkills, "skill", (player, points) => player.AddUnusedSkillPoints(points))),
-        (NpcGreetings.SullivantheReaper, new Vector3(35f, 0f, -21f), 120f, plugin => plugin.OfferDungeonReset())
+        (NpcGreetings.SullivantheReaper, new Vector3(35f, 0f, -21f), 120f, plugin => plugin.OfferDungeonReset()),
+        (NpcGreetings.Twigger, new Vector3(-12f, 0f, 6.5f), 142f, null),
+        (NpcGreetings.Cyrus, new Vector3(-14.5f, 0f, 6f), 142f, null),
+        (NpcGreetings.Malkondra, new Vector3(-17f, 0f, 5.5f), 142f, null),
+        (NpcGreetings.AwadjitheHermitSage, new Vector3(-19.5f, 0f, 5f), 142f, null),
+        (NpcGreetings.KuroshtheBeggarKing, new Vector3(-22f, 0f, 4.5f), 142f, null),
+        (NpcGreetings.Alethe, new Vector3(-24f, 0f, 4f), 142f, null)
     };
     private static readonly AccessTools.FieldRef<NPC, bool> CanMoveRef = AccessTools.FieldRefAccess<NPC, bool>("canMove");
     private static readonly AccessTools.FieldRef<NPC, GameObject[]> PatrolRef = AccessTools.FieldRefAccess<NPC, GameObject[]>("patrolPoints");
+    private static readonly AccessTools.FieldRef<PromptUI, Action<bool>> PromptResolveRef = AccessTools.FieldRefAccess<PromptUI, Action<bool>>("onPromptResolve");
     private static readonly AccessTools.FieldRef<PlayerUI, Button> LevelUpButtonRef = AccessTools.FieldRefAccess<PlayerUI, Button>("levelUpIndicator");
     private readonly Dictionary<NpcGreetings, GameObject> npcTemplates = new Dictionary<NpcGreetings, GameObject>();
     private readonly HashSet<Tableflip.Scene> visitedHomes = new HashSet<Tableflip.Scene>();
     private Transform? npcCache;
     private Action? travelAfterBorrowing;
+    private const int NoScene = -1;
+    private int quietScene = NoScene;
     private bool furnishing, borrowingNpcs;
 
     private void InstallTownNpcHooks()
@@ -53,10 +65,10 @@ public sealed partial class Plugin
             .Where(type => typeof(MonoBehaviour).IsAssignableFrom(type) && !type.ContainsGenericParameters)
             .SelectMany(type => StartupMethods.Select(name => AccessTools.DeclaredMethod(type, name, Type.EmptyTypes)))
             .Where(method => method != null && !method.IsAbstract)) harmony!.Patch(startup, prefix: quiet);
+        harmony!.Patch(AccessTools.Method(typeof(QuestInteractable), nameof(QuestInteractable.Interact)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeGroveNpcTalk)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterGroveNpcTalk)));
     }
 
-    private static bool BeforeBorrowedStartup(Component __instance) =>
-        Active == null || !Active.borrowingNpcs || !BorrowedNpcs.Any(borrowed => (int)borrowed.Home == __instance.gameObject.scene.buildIndex);
+    private static bool BeforeBorrowedStartup(Component __instance) => Active == null || Active.quietScene == NoScene || __instance.gameObject.scene.buildIndex != Active.quietScene;
 
     private void FurnishTown()
     {
@@ -74,6 +86,7 @@ public sealed partial class Plugin
             {
                 visitedHomes.Add(home);
                 borrowingNpcs = true;
+                quietScene = (int)home;
                 yield return SceneManager.LoadSceneAsync((int)home, LoadSceneMode.Additive);
                 yield return SceneManager.UnloadSceneAsync((int)home);
             }
@@ -81,6 +94,7 @@ public sealed partial class Plugin
         finally
         {
             furnishing = borrowingNpcs = false;
+            quietScene = NoScene;
             var travel = travelAfterBorrowing;
             travelAfterBorrowing = null;
             if (travel != null) travel();
@@ -104,18 +118,46 @@ public sealed partial class Plugin
             voice.gameObject.SetActive(false);
             voice.transform.SetParent(npcCache, true);
             voice.transform.Find(NpcMarker).localPosition = Vector3.zero;
-            if (voice.TryGetComponent<RealmQuestGiver>(out var storyteller)) MakeTownService(storyteller);
+            if (voice.TryGetComponent<RealmQuestGiver>(out var storyteller)) KeepRunStory(storyteller);
             npcTemplates[voice.thisNpc] = voice.gameObject;
         }
         foreach (var root in roots) root.SetActive(false);
     }
 
-    private static void MakeTownService(RealmQuestGiver storyteller)
+    private static void KeepRunStory(RealmQuestGiver storyteller)
     {
-        storyteller.realmQuests = Array.Empty<RealmQuest>();
         storyteller.hasInitialGreeting = false;
-        Object.DestroyImmediate(storyteller.GetComponent<QuestInteractable>());
-        storyteller.gameObject.AddComponent<TownService>();
+        storyteller.realmQuests = storyteller.realmQuests.Where(quest => quest != null && InRunStory(quest)).ToArray();
+    }
+
+    private static bool BeforeGroveNpcTalk(QuestInteractable __instance, out Action<Plugin>? __state)
+    {
+        __state = null;
+        var plugin = Active;
+        var offer = GroveNpcs.FirstOrDefault(npc => npc.Npc == __instance.GetComponent<NpcVoiceLines>().thisNpc).Offer;
+        if (plugin == null || offer == null) return true;
+        var storyteller = __instance.GetComponent<RealmQuestGiver>();
+        if (HasStoryStep(storyteller))
+        {
+            if (storyteller.ActiveQuest.Status == Quest.QuestStatus.None) __state = offer;
+            return true;
+        }
+        __instance.GetComponent<NpcVoiceLines>().PlayYourLine();
+        offer(plugin);
+        return false;
+    }
+
+    private static void AfterGroveNpcTalk(Action<Plugin>? __state)
+    {
+        var plugin = Active;
+        if (__state == null || plugin == null || !PromptUI.IsPromptActive) return;
+        PromptResolveRef(SingletonBehaviour<PromptUI>.Instance) += yes => { if (!yes) __state(plugin); };
+    }
+
+    private static bool HasStoryStep(RealmQuestGiver? storyteller)
+    {
+        var quest = storyteller?.ActiveQuest;
+        return quest != null && (quest.Status == Quest.QuestStatus.Completed || (quest.Status == Quest.QuestStatus.None && !storyteller!.IsQuestLocked().locked));
     }
 
     private void PlaceTownNpcs()
@@ -136,15 +178,17 @@ public sealed partial class Plugin
                 if (Player.PlayerChar != null) npc.GetComponent<Merchant>().GenerateItemInventory();
                 continue;
             }
-            var spot = TownServices.First(s => s.Npc == template.Key);
+            var spot = GroveNpcs.First(s => s.Npc == template.Key);
+            var stories = template.Value.TryGetComponent<RealmQuestGiver>(out var storyteller) ? storyteller.realmQuests.Where(RunStoryOpen).ToArray() : Array.Empty<RealmQuest>();
+            if (spot.Offer == null && stories.Length == 0) continue;
             NavMesh.SamplePosition(spot.Spot, out var ground, GroundSearch, NavMesh.AllAreas);
-            var service = Object.Instantiate(template.Value, ground.position, Quaternion.Euler(0f, spot.Yaw, 0f), merchants[0].transform.parent);
+            var resident = Object.Instantiate(template.Value, ground.position, Quaternion.Euler(0f, spot.Yaw, 0f), merchants[0].transform.parent);
+            if (resident.TryGetComponent<RealmQuestGiver>(out var residentStories)) residentStories.realmQuests = stories;
             var icon = merchants[0].GetComponentInChildren<MiniMapIconUI>(true).transform;
-            var copy = Object.Instantiate(icon.gameObject, service.transform).transform;
+            var copy = Object.Instantiate(icon.gameObject, resident.transform).transform;
             copy.localPosition = icon.localPosition;
             copy.localScale = IconScaleBeforeAwake(icon);
-            service.GetComponent<TownService>().Setup(template.Key, () => spot.Offer(this));
-            service.SetActive(true);
+            resident.SetActive(true);
         }
     }
 
@@ -204,10 +248,14 @@ public sealed partial class Plugin
 
     private static void ResetDungeons()
     {
-        var keep = PortalEntry()?.levelDepth ?? 0;
-        var storage = SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).dungeonSave;
-        storage?.dungeons?.RemoveAll(floor => floor.depth != keep);
-        storage?.latestDepths?.RemoveAll(depth => depth != keep);
+        var portal = PortalEntry();
+        foreach (var (realm, _, _) in RunSections)
+        {
+            var keep = portal != null && portal.dungeonRealm == realm ? portal.levelDepth : 0;
+            var storage = SaveData.CurrentSaveData.GetRealmSave(realm).dungeonSave;
+            storage?.dungeons?.RemoveAll(floor => floor.depth != keep);
+            storage?.latestDepths?.RemoveAll(depth => depth != keep);
+        }
         SaveData.RequestSave();
     }
 
@@ -215,22 +263,5 @@ public sealed partial class Plugin
     {
         ResetDungeons();
         Notify(partner.Name + " reset the dungeons.");
-    }
-}
-
-public sealed class TownService : InteractableSceneObject
-{
-    private Action? offer;
-
-    internal void Setup(NpcGreetings npc, Action service)
-    {
-        InteractableName = "NPC_" + npc;
-        offer = service;
-    }
-
-    public override void Interact(Character? interactor = null)
-    {
-        GetComponent<NpcVoiceLines>().PlayYourLine();
-        offer?.Invoke();
     }
 }

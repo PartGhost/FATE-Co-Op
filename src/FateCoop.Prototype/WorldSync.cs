@@ -25,7 +25,8 @@ public sealed partial class Plugin
 
     [Serializable] private sealed class WorldSnapshot
     {
-        public int version = 3;
+        public int version = 4;
+        public RealmData.RealmId realm;
         public string worldKey = "", layoutHash = "";
         public DungeonSaveData floor = null!;
         public List<int> monsterIds = new List<int>();
@@ -55,7 +56,8 @@ public sealed partial class Plugin
             plugin.travelAfterBorrowing = () => SceneLoad.LoadAsync(sceneIndex, save, withLoadingScreen, onDone, fadeIn, fadeOut);
             return false;
         }
-        var depth = sceneIndex == (int)Tableflip.Scene.Dungeon ? SaveData.CurrentSaveData.GetLatestDepth(RealmData.RealmId.Grove) : 0;
+        var realm = SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm;
+        var depth = sceneIndex == (int)Tableflip.Scene.Dungeon ? RunFloor(realm, SaveData.CurrentSaveData.GetLatestDepth(realm)) : 0;
         if (depth > 0 && plugin.HoldTravel(depth, true, () => SceneLoad.LoadAsync(sceneIndex, save, withLoadingScreen, onDone, fadeIn, fadeOut))) return false;
         plugin.travelDepth = depth;
         plugin.BeginWorldChange();
@@ -66,8 +68,9 @@ public sealed partial class Plugin
     {
         var plugin = Active;
         if (plugin == null) return true;
-        if (plugin.HoldTravel(newLevelDepth, goesDown, () => __instance.ReplaceDungeon(newWorldLocationX, newWorldLocationZ, newLevelDepth, newLevelRealm, goesDown, useSavedPosition, ignoreSavedState, skipSave))) return false;
-        plugin.travelDepth = newLevelDepth;
+        var runFloor = RunFloor((RealmData.RealmId)newLevelRealm, newLevelDepth);
+        if (plugin.HoldTravel(runFloor, goesDown, () => __instance.ReplaceDungeon(newWorldLocationX, newWorldLocationZ, newLevelDepth, newLevelRealm, goesDown, useSavedPosition, ignoreSavedState, skipSave))) return false;
+        plugin.travelDepth = runFloor;
         plugin.BeginWorldChange();
         return true;
     }
@@ -138,10 +141,10 @@ public sealed partial class Plugin
         var plugin = Active;
         if (plugin?.pendingWorld == null) return;
         var world = plugin.pendingWorld;
-        if (__instance.GetLevelDepth() != world.floor.depth) return;
+        if (__instance.GetLevelDepth() != world.floor.depth || SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm != world.realm) return;
         world.floor.droppedItems.Clear();
         world.floor.containers.RemoveAll(container => string.IsNullOrEmpty(container.containerItemId));
-        var realm = SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove);
+        var realm = SaveData.CurrentSaveData.GetRealmSave(world.realm);
         realm.SetLastVisitedDungeonDepth(world.floor.depth);
         realm.SetDungeonSave(world.floor.depth, world.floor);
         plugin.pendingWorld = null;
@@ -206,8 +209,9 @@ public sealed partial class Plugin
     {
         var generator = LevelGenerator.currentInstance;
         generator.PreSaveTask(SaveData.CurrentSaveData);
-        var floor = SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).GetDungeonSave(generator.GetLevelDepth());
-        return new WorldSnapshot { worldKey = CurrentWorldKey(), layoutHash = layoutHash, floor = floor, monsterIds = AssignExportIds(floor) };
+        var realm = SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm;
+        var floor = SaveData.CurrentSaveData.GetRealmSave(realm).GetDungeonSave(generator.GetLevelDepth());
+        return new WorldSnapshot { realm = realm, worldKey = CurrentWorldKey(), layoutHash = layoutHash, floor = floor, monsterIds = AssignExportIds(floor) };
     }
 
     private void SendWorldTo(Partner partner, string key)
@@ -232,7 +236,7 @@ public sealed partial class Plugin
     {
         if (Player.PlayerChar == null || Fate.CurrentFateVer != Fate.FateVer.Original)
             throw new InvalidOperationException("Joining requires a selected Original FATE character.");
-        if (snapshot.version != 3 || snapshot.floor == null || snapshot.monsterIds.Count != snapshot.floor.monsters.Count || snapshot.floor.depth < 1 || snapshot.floor.depth > 10000
+        if (snapshot.version != 4 || !InRun(snapshot.realm) || !RunRealmOpen(snapshot.realm) || snapshot.floor == null || snapshot.monsterIds.Count != snapshot.floor.monsters.Count || snapshot.floor.depth < 1 || snapshot.floor.depth > 10000
             || snapshot.floor.templateIndex < 0 || snapshot.floor.templateIndex >= SingletonBehaviour<FateDB>.Instance.allTemplates.Length
             || snapshot.layoutHash.Length != 64 || snapshot.worldKey.Length > 128 || snapshot.worldKey.Length == 0)
             throw new InvalidOperationException("Incoming floor is invalid.");
@@ -243,11 +247,13 @@ public sealed partial class Plugin
         Player.latestStairsUsedWasDown = heldGoesDown;
         Player.isComingFromMenu = false;
         Player.isEnteringDungeonFromTownDoor = true;
-        SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm = RealmData.RealmId.Grove;
-        SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove).SetLastVisitedDungeonDepth(snapshot.floor.depth);
         if (SceneLoad.CurrentScene == Tableflip.Scene.Dungeon)
-            LevelGenerator.currentInstance.ReplaceDungeon(snapshot.floor.worldLocationX, snapshot.floor.worldLocationZ, snapshot.floor.depth, (int)RealmData.RealmId.Grove, heldGoesDown, false);
-        else SceneLoad.LoadAsync(Tableflip.Scene.Dungeon, true);
+            LevelGenerator.currentInstance.ReplaceDungeon(snapshot.floor.worldLocationX, snapshot.floor.worldLocationZ, snapshot.floor.depth, (int)snapshot.realm, heldGoesDown, false);
+        else
+        {
+            EnterFloorFromTown(snapshot.realm, snapshot.floor.depth);
+            SceneLoad.LoadAsync(Tableflip.Scene.Dungeon, true);
+        }
         heldGoesDown = true;
         Logger.LogInfo("JOINING_FLOOR depth=" + snapshot.floor.depth + " owner=" + owner);
     }
@@ -267,7 +273,7 @@ public sealed partial class Plugin
         var rival = WorldPartners().Where(p => p.Frame!.owner == p.Id && p.Id < myId).Select(p => p.Id).DefaultIfEmpty(Unassigned).Max();
         if (rival != Unassigned) { YieldOwnership(rival); return; }
         if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || WorldPartners().Any() || requestedWorld.Length > 0 || heldTravel != null) return;
-        var depth = LevelGenerator.currentInstance.GetLevelDepth();
+        var depth = RunFloorHere();
         var other = partners.Values.Select(p => p.Frame).Where(f => f != null && f.scene == Tableflip.Scene.Dungeon.ToString() && f.depth == depth && f.worldKey.Length > 0 && f.worldKey != key && f.owner < myId)
             .OrderBy(f => f!.owner).FirstOrDefault();
         if (other != null) RequestWorld(other);

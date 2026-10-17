@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using HarmonyLib;
 using Tableflip;
@@ -14,12 +15,50 @@ public sealed partial class Plugin
     private const float ScrollSpeed = 35f;
     private static readonly AccessTools.FieldRef<QuestUI, QuestEntryUI[]> SideQuestRowsRef = AccessTools.FieldRefAccess<QuestUI, QuestEntryUI[]>("sideQuests");
     private static readonly AccessTools.FieldRef<QuestUI, QuestEntryUI> MainQuestRowRef = AccessTools.FieldRefAccess<QuestUI, QuestEntryUI>("mainQuest");
+    private static readonly AccessTools.FieldRef<QuestUI, RealmData.RealmId> QuestLogRealmRef = AccessTools.FieldRefAccess<QuestUI, RealmData.RealmId>("activeRealm");
+    private static readonly AccessTools.FieldRef<QuestUI, Button> QuestLogLeftRef = AccessTools.FieldRefAccess<QuestUI, Button>("realmLeftButton");
+    private static readonly AccessTools.FieldRef<QuestUI, Button> QuestLogRightRef = AccessTools.FieldRefAccess<QuestUI, Button>("realmRightButton");
+    private static readonly System.Reflection.MethodInfo BuildQuestLogMethod = AccessTools.Method(typeof(QuestUI), "BuildQuestUIForRealm");
+    private static bool buildingQuestLog;
 
     private void InstallQuestLogHooks()
     {
         harmony!.Patch(AccessTools.Method(typeof(QuestManager), "IsQuestLogFull"), prefix: new HarmonyMethod(typeof(Plugin), nameof(NeverFull)));
         harmony.Patch(AccessTools.Method(typeof(QuestManager), "IsQuestLogFullActiveTownRealm"), prefix: new HarmonyMethod(typeof(Plugin), nameof(NeverFull)));
-        harmony.Patch(AccessTools.Method(typeof(QuestUI), "BuildQuestUIForRealm"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeQuestLog)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterQuestLog)));
+        harmony.Patch(AccessTools.Method(typeof(QuestUI), "BuildQuestUIForRealm"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeQuestLog)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterQuestLog)), finalizer: new HarmonyMethod(typeof(Plugin), nameof(AfterQuestLogBuilt)));
+        harmony.Patch(AccessTools.Method(typeof(QuestManager), nameof(QuestManager.GetQuests), new[] { typeof(int) }), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeQuestLogSideQuests)));
+        harmony.Patch(AccessTools.Method(typeof(QuestUI), "OnEnable"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterQuestLogOpened)));
+        harmony.Patch(AccessTools.Method(typeof(QuestUI), "OnRealmLeftButton"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeQuestLogLeft)));
+        harmony.Patch(AccessTools.Method(typeof(QuestUI), "OnRealmRightButton"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeQuestLogRight)));
+    }
+
+    private static List<RealmData.RealmId> ReachedRunRealms() =>
+        RunSections.Select(section => section.realm).Where(realm => realm == RunSections[0].realm || SaveData.CurrentSaveData.GetRealmSave(realm).maxDepthReached > 0).ToList();
+
+    private static void BeforeQuestLogSideQuests(ref int realmId)
+    {
+        if (buildingQuestLog && InRun((RealmData.RealmId)realmId)) realmId = (int)RunSections[0].realm;
+    }
+
+    private static void AfterQuestLogOpened(QuestUI __instance)
+    {
+        if (!InRun(RunSections[0].realm)) return;
+        var paged = ReachedRunRealms().Count > 1;
+        QuestLogLeftRef(__instance).gameObject.SetActive(paged);
+        QuestLogRightRef(__instance).gameObject.SetActive(paged);
+    }
+
+    private static bool BeforeQuestLogLeft(QuestUI __instance) => PageQuestLog(__instance, -1);
+
+    private static bool BeforeQuestLogRight(QuestUI __instance) => PageQuestLog(__instance, 1);
+
+    private static bool PageQuestLog(QuestUI log, int step)
+    {
+        if (!InRun(QuestLogRealmRef(log))) return true;
+        var realms = ReachedRunRealms();
+        var next = (realms.IndexOf(QuestLogRealmRef(log)) + step + realms.Count) % realms.Count;
+        BuildQuestLogMethod.Invoke(log, new object[] { realms[next] });
+        return false;
     }
 
     private static bool NeverFull(ref bool __result)
@@ -31,8 +70,11 @@ public sealed partial class Plugin
     private static int ShownQuestCount(RealmData.RealmId realm) =>
         SingletonBehaviour<QuestManager>.Instance.GetQuests((int)realm)?.Count(q => q != null && !string.IsNullOrEmpty(q.QuestGiverName) && q.Status != Quest.QuestStatus.None) ?? 0;
 
+    private static void AfterQuestLogBuilt() => buildingQuestLog = false;
+
     private static void BeforeQuestLog(QuestUI __instance, RealmData.RealmId realm)
     {
+        buildingQuestLog = true;
         var rows = SideQuestRowsRef(__instance);
         var content = QuestScrollContent(__instance, rows);
         var wanted = Mathf.Max(VisibleQuestRows, ShownQuestCount(realm));

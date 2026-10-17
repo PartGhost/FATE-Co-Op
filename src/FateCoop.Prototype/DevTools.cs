@@ -8,6 +8,7 @@ using Cleverous.VaultInventory;
 using HarmonyLib;
 using Steamworks;
 using Tableflip;
+using TMPro;
 using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.InputSystem;
@@ -21,6 +22,8 @@ public sealed partial class Plugin
     private const int MainHandSlot = 6;
     private static readonly AccessTools.FieldRef<LevelGenerator, TemplateData> TemplateRef = AccessTools.FieldRefAccess<LevelGenerator, TemplateData>("activeTemplate");
     private static readonly AccessTools.FieldRef<LevelGenerator, int> TemplateIndexRef = AccessTools.FieldRefAccess<LevelGenerator, int>("activeTemplateIndex");
+    private static readonly AccessTools.FieldRef<PromptUI, TextMeshProUGUI> PromptBodyRef = AccessTools.FieldRefAccess<PromptUI, TextMeshProUGUI>("bodyText");
+    private static readonly System.Reflection.MethodInfo ItemDepthGetter = AccessTools.PropertyGetter(typeof(LevelGenerator), "GetAdjustedItemDepth");
     private static TemplateData? forcedTemplate;
     private static TemplateData[]? allTemplates;
 
@@ -258,7 +261,15 @@ public sealed partial class Plugin
             case "next-floor":
                 if (LevelGenerator.currentInstance == null || transitioning) throw new InvalidOperationException("Dungeon is not ready.");
                 Fate.SetPause(true);
-                TravelToFloor(LevelGenerator.currentInstance.GetLevelDepth() + 1);
+                TravelToFloor(RunFloorHere() + 1);
+                break;
+            case "test-run-floor":
+                TravelToFloor(int.Parse(parts[1], CultureInfo.InvariantCulture));
+                break;
+            case "test-stairs":
+                var goesDown = parts[1] == "down";
+                Object.FindObjectsOfType<MoveUpOrDownDungeon>().First(stairs => stairs.goesDown == goesDown).Interact(Player.PlayerChar);
+                AnswerPrompt(SingletonBehaviour<PromptUI>.Instance, true);
                 break;
             case "town": TravelToTown(); break;
             case "test-down":
@@ -275,6 +286,24 @@ public sealed partial class Plugin
                 Player.PlayerChar.GetComponent<NavMeshAgent>().Warp(talker.transform.position + talker.transform.forward * 2f);
                 talker.GetComponent<InteractableSceneObject>().Interact(Player.PlayerChar);
                 if (parts.Length > 2) AnswerPrompt(SingletonBehaviour<PromptUI>.Instance, true);
+                break;
+            case "test-quest-page":
+                var pagedLog = Object.FindObjectOfType<QuestUI>();
+                (parts[1] == "right" ? QuestLogRightRef(pagedLog) : QuestLogLeftRef(pagedLog)).onClick.Invoke();
+                break;
+            case "test-navgrid":
+                var area = parts.Skip(1).Select(value => float.Parse(value, CultureInfo.InvariantCulture)).ToArray();
+                var rows = new List<string>();
+                for (var z = area[3]; z >= area[1]; z -= 1f)
+                    rows.Add($"{z,6:0} " + string.Concat(Enumerable.Range(0, (int)(area[2] - area[0]) + 1).Select(step => Physics.Raycast(new Vector3(area[0] + step, 30f, z), Vector3.down, out var ground, 60f) && NavMesh.SamplePosition(ground.point, out _, 0.4f, NavMesh.AllAreas) ? '.' : '#')));
+                rows.Add("       x from " + area[0] + " to " + area[2]);
+                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), rows);
+                break;
+            case "test-dlcs":
+                ownedDlcs = int.Parse(parts[1], CultureInfo.InvariantCulture);
+                break;
+            case "test-answer":
+                AnswerPrompt(SingletonBehaviour<PromptUI>.Instance, parts[1] == "yes");
                 break;
             case "test-warp":
                 Player.PlayerChar.GetComponent<NavMeshAgent>().Warp(new Vector3(float.Parse(parts[1], CultureInfo.InvariantCulture), Player.PlayerChar.transform.position.y, float.Parse(parts[2], CultureInfo.InvariantCulture)));
@@ -346,8 +375,11 @@ public sealed partial class Plugin
                 if (!SingletonBehaviour<PortalManager>.Instance.TryCreatePortal(Player.PlayerChar)) throw new InvalidOperationException("Couldn't open a portal here.");
                 break;
             case "test-use-portal":
-                var friendPortal = partners.Values.Select(p => p.TownPortal).FirstOrDefault(p => p != null) ?? throw new InvalidOperationException("No friend portal here.");
-                friendPortal.GetComponent<EnterPortal>().Interact(Player.PlayerChar);
+                var friendPortals = partners.Values.SelectMany(p => new[] { p.TownPortal, p.Portal }).Where(p => p != null).ToList();
+                var usedPortal = parts.Length > 1 && parts[1] == "own"
+                    ? Object.FindObjectsOfType<EnterPortal>().FirstOrDefault(p => p.portalType == EnterPortal.PortalType.Dungeon && !friendPortals.Contains(p.gameObject)) ?? throw new InvalidOperationException("No portal of yours here.")
+                    : (partners.Values.Select(p => p.TownPortal).FirstOrDefault(p => p != null) ?? throw new InvalidOperationException("No friend portal here.")).GetComponent<EnterPortal>();
+                usedPortal.Interact(Player.PlayerChar);
                 AnswerPrompt(SingletonBehaviour<PromptUI>.Instance, true);
                 break;
             case "follow-partner":
@@ -468,6 +500,19 @@ public sealed partial class Plugin
             case "test-templates":
                 File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), SingletonBehaviour<FateDB>.Instance.allTemplates.Where(t => t != null).Select(t => $"{t.realmId} | {t.templateName} | {string.Join(", ", t.props.Where(p => p != null && p.modelPrefab != null).Select(p => p.modelPrefab.name).Where(n => FixturesByProp.ContainsKey(n) || n.Contains("Campfire")).Distinct())}"));
                 break;
+            case "test-realms":
+                var realmDb = SingletonBehaviour<FateDB>.Instance;
+                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"),
+                    realmDb.realmQuests.Where(q => q != null).OrderBy(q => q.targetRealm).ThenBy(q => q.id)
+                        .Select(q => $"QUEST {q.targetGame} | {q.targetRealm} | id={q.id} | depth={q.depth} | minLevel={q.minLevel} | block={q.block} | required={q.required} | hidden={q.hidden} | {q.title} | type={q.questType} | monster={q.monster} | target={q.target} | item={q.item} | race={q.raceReq} | needs=[{string.Join(",", q.keysRequired ?? new List<string>())}] | gives=[{string.Join(",", q.keysToProgress ?? new List<string>())}] | flag={q.progressFlag}")
+                    .Concat(realmDb.allMonsters.Where(m => m != null && m.alignment == Alignment.Evil && !m.reserved).OrderBy(m => m.minimumDepth)
+                        .Select(m => $"MONSTER {m.displayName} | realms={string.Join(",", m.realms ?? new List<int>())} | depth={m.minimumDepth}-{m.maximumDepth} | baseLevel={m.baseLevel} | expansion={m.expansion} | rarity={m.rarity}"))
+                    .Concat(new[] { Fate.FateVer.Original, Fate.FateVer.UndiscoveredRealms, Fate.FateVer.TraitorSoul, Fate.FateVer.CursedKing }
+                        .Select(game => $"DISALLOW {game} | types=[{string.Join(", ", realmDb.GetDisallowsByGame(game).disallowedTypes)}] | items={realmDb.GetDisallowsByGame(game).disallowedItemDatas.Length}")));
+                break;
+            case "test-town-scan":
+                StartCoroutine(ScanTown((Tableflip.Scene)Enum.Parse(typeof(Tableflip.Scene), parts[1])));
+                break;
             case "test-props":
                 var templates = Resources.FindObjectsOfTypeAll<TemplateData>();
                 File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), Resources.FindObjectsOfTypeAll<PropData>().Where(p => p.modelPrefab != null).OrderBy(p => p.modelPrefab.name).Select(p =>
@@ -561,6 +606,31 @@ public sealed partial class Plugin
         foreach (Transform child in node) DumpObject(child, lines, depth + 1, maxDepth);
     }
 
+    private IEnumerator ScanTown(Tableflip.Scene town)
+    {
+        quietScene = (int)town;
+        try
+        {
+            yield return SceneManager.LoadSceneAsync((int)town, LoadSceneMode.Additive);
+            var roots = SceneManager.GetSceneByBuildIndex((int)town).GetRootGameObjects();
+            var lines = roots.SelectMany(root => root.GetComponentsInChildren<Component>(true)).Select(component => component switch
+            {
+                EnterDungeon entrance => $"ENTRANCE {PathOf(entrance.transform)} | realm={entrance.dungeonRealmOverride} | requirement={entrance.requirement}",
+                EnterPortal portal => $"PORTAL {PathOf(portal.transform)} | type={portal.portalType} | realm={portal.destinationRealm} | spawn={portal.destinationSpawnPointIndex} | requirement={portal.portalRequirement}",
+                RealmQuestGiver story => $"STORY {PathOf(story.transform)} | {string.Join(", ", story.realmQuests.Where(q => q != null).Select(q => $"{q.targetGame}/{q.targetRealm}/{q.id}"))}",
+                QuestGiver giver => $"QUESTS {giver.CharacterName} | {giver.GetType().Name}",
+                Merchant merchant => $"MERCHANT {merchant.CharacterName} | {merchant.merchantType}",
+                NpcVoiceLines voice => $"VOICE {voice.thisNpc} | {PathOf(voice.transform)}",
+                _ => null
+            }).Where(line => line != null);
+            File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), lines!);
+            foreach (var root in roots) root.SetActive(false);
+            yield return SceneManager.UnloadSceneAsync((int)town);
+            SetStatus("Scanned " + town);
+        }
+        finally { quietScene = NoScene; }
+    }
+
     private static string PathOf(Transform node) => node.parent == null ? node.name : PathOf(node.parent) + "/" + node.name;
 
     private IEnumerator TestPrimaryWalk(Vector3 direction)
@@ -597,7 +667,14 @@ public sealed partial class Plugin
             guestPosition = actor != null ? actor.transform.position : Vector3.zero,
             guestOnNavMesh = agent != null && agent.isOnNavMesh, guestWalking = animator != null && animator.GetBool("IsWalking"), guestRunning = animator != null && animator.GetBool("IsRunning"),
             spawnedTotal = spawnCount, aiCallsSuppressed = suppressedAI, saveLoaded = SaveData.HasLoaded, steamInitialized = SteamReady, campaign = Fate.CurrentFateVer.ToString(),
-            worldEpoch = worldEpoch, transitioning = transitioning, dungeonDepth = LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth() : 0,
+            worldEpoch = worldEpoch, transitioning = transitioning, dungeonDepth = RunFloorHere(),
+            localDepth = LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth() : 0,
+            dungeonRealm = SingletonBehaviour<PlayerStatus>.InstanceExists() ? SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm.ToString() : "",
+            effectiveDepth = LevelGenerator.effectiveLevelDepth,
+            runSections = string.Join(",", RunSections.Select(section => section.realm + ":" + section.offset)), dlcs = ownedDlcs,
+            prompt = PromptUI.IsPromptActive ? PromptBodyRef(SingletonBehaviour<PromptUI>.Instance).text : "",
+            itemDepth = LevelGenerator.currentInstance != null ? (int)ItemDepthGetter.Invoke(LevelGenerator.currentInstance, null) : 0,
+            monsterLevels = string.Join(",", Object.FindObjectsOfType<Monster>().Where(m => !m.IsPet() && m.GetMonsterRank == Rank.Normal && !m.isUnique && PartnerOfPet(m) == null).Select(m => m.Level).OrderBy(level => level).Distinct()),
             networkConnected = Connected, networkAccepted = networkAccepted, networkRejected = networkRejected, myId = myId, worldOwner = worldOwner, ownsWorld = OwnsWorld,
             partnerCount = partners.Count, partnersInWorld = WorldPartners().Count(),
             sessionRole = link == null ? "" : isHost ? "host" : "guest", localPort = link is LocalLink local ? local.Port : 0,
@@ -625,7 +702,7 @@ public sealed partial class Plugin
             partnerSummons = partners.Values.Sum(p => p.Summons.Count(s => s.Copy != null)),
             mapOpenCells = SingletonBehaviour<MinimapFogGridUI>.InstanceExists() ? FogCellsRef(SingletonBehaviour<MinimapFogGridUI>.Instance)?.Count(open => open) ?? 0 : 0,
             statPoints = player != null ? player.UnusedStatPoint : 0, gold = SingletonBehaviour<PlayerStatus>.InstanceExists() ? (long)SingletonBehaviour<PlayerStatus>.Instance.gold : 0,
-            dungeonFloors = SaveData.CurrentSaveData?.GetRealmSave(RealmData.RealmId.Grove)?.dungeonSave?.dungeons?.Count ?? 0,
+            dungeonFloors = RunSections.Sum(section => SaveData.CurrentSaveData?.GetRealmSave(section.realm)?.dungeonSave?.dungeons?.Count ?? 0),
             localPet = LocalCompanions().OfType<Pet>().FirstOrDefault() is Pet localPet ? $"{localPet.GetAIState()} hp={localPet.hp:0.0} dead={localPet.MyVitals.IsDead} owned={player!.HasPet(localPet)}" : "",
             fixtures = string.Join(" ", FixtureObjects().GroupBy(f => f.kind).Select(g => $"{g.Key}={g.Count(f => f.usable)}/{g.Count()}")),
             replicaImpacts = replicaImpacts, skillPoints = player != null ? player.UnusedSkillPoints : 0,
@@ -649,6 +726,8 @@ public sealed partial class Plugin
         public bool guestOnNavMesh, guestWalking, guestRunning, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, ownsWorld, followPrompt, inCombat, partnerElsewhere, downed, replicaDown, fateChoice;
         public int remotePetActors, localPetCount, partnerTownPortals, partnerPortals, partnerPlates, rangedRolls, rangedMisses, grazes;
         public bool rangedEquipped;
+        public string dungeonRealm = "", monsterLevels = "", prompt = "", runSections = "";
+        public int localDepth, effectiveDepth, itemDepth, dlcs;
         public string townNpcs = "", mainHand = "", localPet = "", fixtures = "", template = "", vitals = "", bagCheck = "", partnerIcon = "", partnerPetPortrait = "", buffs = "";
         public int replicaImpacts, skillPoints;
         public int statPoints, dungeonFloors, friendImpacts, localSummons, partnerSummons, mapOpenCells, bagFreeCells;

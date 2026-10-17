@@ -34,7 +34,7 @@ public sealed partial class Plugin
         assetHolder.gameObject.SetActive(false);
         Object.DontDestroyOnLoad(assetHolder.gameObject);
         var db = SingletonBehaviour<FateDB>.Instance;
-        foreach (var (name, step) in new (string, Action<FateDB>)[] { ("portal back face", AddPortalBackFace), ("dungeon props", PrepareDungeonProps), ("Sagestones", PrepareExperienceGems) })
+        foreach (var (name, step) in new (string, Action<FateDB>)[] { ("portal back face", AddPortalBackFace), ("dungeon props", PrepareDungeonProps), ("Sagestones", PrepareExperienceGems), ("merged run", PrepareRun) })
         {
             try { step(db); }
             catch (Exception e) { Logger.LogError($"Couldn't set up the {name}: {e}"); }

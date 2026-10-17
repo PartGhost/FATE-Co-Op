@@ -11,7 +11,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.21.0";
+    internal const string Version = "0.22.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     internal const int HostId = 0;
     private const int Everyone = -1, Unassigned = -2;
@@ -39,7 +39,7 @@ public sealed partial class Plugin
         public string worldKey = "", scene = "";
         public Vector3 primaryPosition = Vector3.zero;
         public float primaryYaw = 0, swingSpeed = 0, xpPercent = 0, time = 0, revive = 0;
-        public int seq, owner, travelDepth, portalDepth, reviveTarget = Unassigned;
+        public int seq, owner, travelDepth, portalDepth, reviveTarget = Unassigned, dlcs;
         public int swings, casts, hp, maxHp, mana, maxMana, level, depth, fishing, arrows, levelUps, spells, spellTarget;
         public bool running;
         public Vector3 arrowEnd, spellAim, portalPosition;
@@ -115,14 +115,14 @@ public sealed partial class Plugin
         var portal = PortalEntry();
         return new PeerFrame
         {
-            seq = ++frameSeq, time = Time.unscaledTime,
+            seq = ++frameSeq, time = Time.unscaledTime, dlcs = ownedDlcs,
             worldKey = SharedWorldReady() ? CurrentWorldKey() : "", owner = worldOwner, travelDepth = transitioning ? travelDepth : 0, scene = SceneLoad.CurrentScene.ToString(),
             primaryPosition = player != null ? player.transform.position : Vector3.zero, primaryYaw = player != null ? player.transform.eulerAngles.y : 0f, running = LocalRunning(),
             hp = player != null ? player.HP() : 0, maxHp = player != null ? player.MaxHP() : 0, mana = player != null ? player.Mana() : 0, maxMana = player != null ? player.MaxMana() : 0,
-            level = player != null ? player.Level : 0, xpPercent = player != null ? player.GetPctToNextLevel() : 0f, depth = LevelGenerator.currentInstance != null ? LevelGenerator.currentInstance.GetLevelDepth() : 0,
+            level = player != null ? player.Level : 0, xpPercent = player != null ? player.GetPctToNextLevel() : 0f, depth = RunFloorHere(),
             petJson = JsonUtility.ToJson(LocalPetSnapshot()), summonJson = LocalSummonSnapshots().Select(JsonUtility.ToJson).ToList(), swings = localSwings, swingSpeed = localSwingSpeed, casts = localCasts, castSpell = localCastSpell,
             effects = player != null ? ActiveEffectNames(player) : "", fishing = LocalFishing(), arrows = localArrows, arrowEnd = localArrowEnd, levelUps = CountLevelUps(),
-            spells = localSpells, spellName = localSpellName, spellAim = localSpellAim, spellTarget = localSpellTarget, revive = reviveProgress, reviveTarget = reviveTarget, portalWorld = localPortalWorld, portalDepth = portal?.levelDepth ?? 0, portalPosition = portal?.dungeonPosition ?? Vector3.zero
+            spells = localSpells, spellName = localSpellName, spellAim = localSpellAim, spellTarget = localSpellTarget, revive = reviveProgress, reviveTarget = reviveTarget, portalWorld = localPortalWorld, portalDepth = portal != null ? RunFloor(portal.dungeonRealm, portal.levelDepth) : 0, portalPosition = portal?.dungeonPosition ?? Vector3.zero
         };
     }
 
