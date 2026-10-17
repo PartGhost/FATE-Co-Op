@@ -6,7 +6,6 @@ using Cleverous.ThatHurtModule;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
-using UnityEngine.AI;
 
 namespace FateCoop.Prototype;
 
@@ -18,7 +17,7 @@ public sealed partial class Plugin
     private readonly Dictionary<Component, int> groundIds = new Dictionary<Component, int>();
     private readonly Dictionary<int, float> groundSeen = new Dictionary<int, float>();
     private readonly HashSet<int> announcedGround = new HashSet<int>(), pendingTakes = new HashSet<int>();
-    private readonly HashSet<string> announcedFixtures = new HashSet<string>();
+    private readonly HashSet<string> announcedFixtures = new HashSet<string>(), keyedChests = new HashSet<string>();
     private readonly Dictionary<string, float> fixtureRetry = new Dictionary<string, float>();
     private int nextGroundId = 1, lootGiven, lootTaken, dropsSent;
     private float nextGroundSync, nextGroundCheck;
@@ -76,9 +75,8 @@ public sealed partial class Plugin
             Active!.RequestFixture("c", position);
             return false;
         }
-        var key = Player.PlayerChar.inventory.FirstOrDefault(item => item.itemType == ItemType.ChestKey);
-        if (key == null) return true;
-        if (Active!.RequestFixture("k", position)) Player.PlayerChar.RemoveItemFromInventory(key, RemoveItemReason.Consumed);
+        if (!Player.PlayerChar.inventory.Any(item => item.itemType == ItemType.ChestKey)) return true;
+        if (Active!.RequestFixture("k", position)) Active.keyedChests.Add(FixtureKey("c", position));
         return false;
     }
 
@@ -147,8 +145,21 @@ public sealed partial class Plugin
         {
             if (LevelGenerator.currentInstance != null) LevelGenerator.currentInstance.RemoveDroppedItem(dropped);
             dropped.Remove();
+            return;
         }
-        else UnityEngine.Object.Destroy(obj.gameObject);
+        obj.transform.SetParent(null);
+        UnityEngine.Object.Destroy(obj.gameObject);
+    }
+
+    private void ReleaseSharedGround()
+    {
+        if (!OwnsWorld || !WorldPartners().Any()) return;
+        foreach (var id in announcedGround) RemoveGroundObject(ground[id]);
+    }
+
+    private void SendGroundTo(int owner)
+    {
+        foreach (var obj in ground.Values.Where(obj => obj != null)) Send("drop", JsonUtility.ToJson(Describe(0, obj)), owner, worldScoped: true);
     }
 
     private void ResetGround()
@@ -161,6 +172,7 @@ public sealed partial class Plugin
         pendingTakes.Clear();
         announcedFixtures.Clear();
         fixtureRetry.Clear();
+        keyedChests.Clear();
         nextGroundId = 1;
     }
 
@@ -275,7 +287,8 @@ public sealed partial class Plugin
         var entry = Describe(id, obj);
         RemoveGroundObject(obj);
         ForgetGround(id);
-        Send("granted", JsonUtility.ToJson(entry), partner.Id, worldScoped: true);
+        SendWorld("ground-gone", body);
+        Send("granted", JsonUtility.ToJson(entry), partner.Id);
         lootGiven++;
     }
 
@@ -312,10 +325,8 @@ public sealed partial class Plugin
     {
         if (!OwnsWorld) return;
         var entry = ReadGroundItem(body);
-        if (!NavMesh.SamplePosition(entry.position, out var hit, 3f, NavMesh.AllAreas) && !NavMesh.SamplePosition(Player.PlayerChar.transform.position, out hit, 3f, NavMesh.AllAreas))
-            throw new InvalidOperationException("Dropped item has no valid place.");
-        if (entry.gold > 0) ActiveLevel.SpawnGoldPile(hit.position, entry.gold);
-        else ToItem(entry.item).Drop(hit.position);
+        if (entry.gold > 0) ActiveLevel.SpawnGoldPile(entry.position, entry.gold);
+        else ToItem(entry.item).Drop(entry.position);
     }
 
     private void UseFixture(string body)
@@ -349,6 +360,8 @@ public sealed partial class Plugin
         {
             if (parts[0] == "c")
             {
+                var key = keyedChests.Remove(body) ? Player.PlayerChar.inventory.FirstOrDefault(item => item.itemType == ItemType.ChestKey) : null;
+                if (key != null) Player.PlayerChar.RemoveItemFromInventory(key, RemoveItemReason.Consumed);
                 var chest = Nearest(UnityEngine.Object.FindObjectsOfType<ContainerInteractable>(), position);
                 if (chest == null || chest.IsOpen) return;
                 chest.Init(false, 0, TrapType.TrapNone, new List<Item>(), false);

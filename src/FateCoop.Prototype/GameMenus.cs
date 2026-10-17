@@ -17,11 +17,12 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const float MessageSeconds = 5f, PauseButtonHeight = 66f;
-    private const int MinPlayers = 2, MaxPlayers = 16;
+    private const int MinPlayers = 2, MaxPlayers = 16, FriendRows = 4;
     private readonly Queue<string> pendingPrompts = new Queue<string>();
     private readonly List<Button> mainMenuButtons = new List<Button>(), coopMenuButtons = new List<Button>(), goToButtons = new List<Button>();
     private MainMenuUI? mainMenu;
     private Button? hostPauseButton, invitePauseButton, leavePauseButton, playersButton;
+    private ScrollRect? friendList;
     private Vector2 pauseContentSize;
     private bool coopMenuOpen, autoContinued;
 
@@ -139,30 +140,44 @@ public sealed partial class Plugin
         if (hostPauseButton == null)
         {
             pauseContentSize = content.sizeDelta;
+            goToButtons.Clear();
             hostPauseButton = CloneButton(options, "Host co-op", () => { resume.onClick.Invoke(); TryHostSteam(); });
             invitePauseButton = CloneButton(options, "Invite friend", () => { resume.onClick.Invoke(); (link as SteamLink)?.Invite(); });
+            friendList = CreateScrollList("FateCoop_FriendList", options.transform.parent, options.transform.parent.GetComponent<VerticalLayoutGroup>().spacing);
+            friendList.gameObject.AddComponent<LayoutElement>();
             leavePauseButton = CloneButton(options, "Leave co-op", () => { resume.onClick.Invoke(); EndSession("You left co-op."); });
         }
         var elsewhere = PartnersElsewhere().ToList();
-        while (goToButtons.Count < elsewhere.Count) goToButtons.Add(CloneButton(options, "", () => { }));
+        while (goToButtons.Count < elsewhere.Count)
+        {
+            var button = CloneButton(options, "", () => { });
+            button.transform.SetParent(friendList!.content, false);
+            var label = button.GetComponentInChildren<TMP_Text>(true);
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.overflowMode = TextOverflowModes.Ellipsis;
+            goToButtons.Add(button);
+        }
         for (var i = 0; i < goToButtons.Count; i++)
         {
             var button = goToButtons[i];
             button.gameObject.SetActive(i < elsewhere.Count);
             if (i >= elsewhere.Count) continue;
             var partner = elsewhere[i];
-            button.GetComponentInChildren<TMP_Text>(true).text = "Go to " + partner.Name + " (" + DescribePlace(PartnerPlace(partner.Frame)) + ")";
+            button.GetComponentInChildren<TMP_Text>(true).text = "Go to " + DescribePlace(PartnerPlace(partner.Frame)) + " (" + partner.Name + ")";
             button.onClick.RemoveAllListeners();
             button.onClick.AddListener(() => { resume.onClick.Invoke(); GoToPartner(partner); });
         }
         hostPauseButton.gameObject.SetActive(link == null && SteamReady);
         invitePauseButton!.gameObject.SetActive(link is SteamLink { CanInvite: true });
         leavePauseButton!.gameObject.SetActive(link != null);
-        var extras = new[] { hostPauseButton, invitePauseButton }.Concat(goToButtons).Append(leavePauseButton).ToArray();
+        var shown = Mathf.Min(elsewhere.Count, FriendRows);
+        friendList!.gameObject.SetActive(shown > 0);
+        friendList.GetComponent<LayoutElement>().preferredHeight = shown * PauseButtonHeight - friendList.content.GetComponent<VerticalLayoutGroup>().spacing;
+        friendList.content.anchoredPosition = Vector2.zero;
         var index = options.transform.GetSiblingIndex() + 1;
-        foreach (var button in extras) button.transform.SetSiblingIndex(index++);
-        var order = new[] { saveQuit, options }.Concat(extras).Append(resume).Where(button => button.gameObject.activeSelf).ToArray();
-        content.sizeDelta = pauseContentSize + new Vector2(0f, (order.Length - 3) * PauseButtonHeight);
+        foreach (var extra in new Component[] { hostPauseButton, invitePauseButton, friendList, leavePauseButton }) extra.transform.SetSiblingIndex(index++);
+        var order = new[] { saveQuit, options, hostPauseButton, invitePauseButton }.Concat(goToButtons).Append(leavePauseButton).Append(resume).Where(button => button.gameObject.activeSelf).ToArray();
+        content.sizeDelta = pauseContentSize + new Vector2(0f, (order.Length - elsewhere.Count + shown - 3) * PauseButtonHeight);
         for (var i = 0; i < order.Length; i++)
         {
             var navigation = order[i].navigation;
@@ -195,7 +210,7 @@ public sealed partial class Plugin
         if (coopMenuOpen && ((keyboard != null && keyboard.escapeKey.wasPressedThisFrame) || (gamepad != null && gamepad.buttonEast.wasPressedThisFrame))) ShowCoopMenu(false);
         if (pendingPrompts.Count > 0 && SingletonBehaviour<PromptUI>.InstanceExists() && !PromptUI.IsPromptActive)
             SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw(pendingPrompts.Dequeue(), null, twoButtons: false, "OK");
-        foreach (var button in goToButtons) button.interactable = !InCombat;
+        if (hostPauseButton != null) foreach (var button in goToButtons) button.interactable = !InCombat;
         if (coopMenuOpen && playersButton != null && EventSystem.current.currentSelectedGameObject == playersButton.gameObject)
         {
             var left = (keyboard != null && (keyboard.leftArrowKey.wasPressedThisFrame || keyboard.aKey.wasPressedThisFrame)) || (gamepad != null && gamepad.dpad.left.wasPressedThisFrame);

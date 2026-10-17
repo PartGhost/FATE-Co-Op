@@ -254,7 +254,6 @@ public sealed partial class Plugin
 
     private void UpdateOwnership()
     {
-        UpdateHeldTravel();
         var key = LocalFrameWorld();
         if (key.Length == 0) return;
         if (!OwnsWorld)
@@ -291,8 +290,8 @@ public sealed partial class Plugin
 
     private void YieldOwnership(int owner)
     {
+        SendGroundTo(owner);
         worldOwner = owner;
-        foreach (var obj in ground.Values) RemoveGroundObject(obj);
         ResetGround();
         foreach (var monster in monsters.Values.Where(m => m != null))
         {

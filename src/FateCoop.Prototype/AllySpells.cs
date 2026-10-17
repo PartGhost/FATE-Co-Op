@@ -13,7 +13,7 @@ public sealed partial class Plugin
     private const int SpellBuffSeconds = 150;
     private static readonly EffectType[] UnstretchedEffects = { EffectType.HPRecharge, EffectType.ManaRecharge, EffectType.StaminaRecharge, EffectType.Summon, EffectType.SummonWard, EffectType.Transform };
     private static readonly ItemTarget[] PartyTargets = { ItemTarget.UserAndPetsAndParty, ItemTarget.UserAndParty, ItemTarget.UserParty, ItemTarget.MasterOrUserAndPetsAndParty, ItemTarget.MasterOrUserAndParty, ItemTarget.MasterOrUserParty };
-    private static readonly ItemTarget[] SelfTargets = { ItemTarget.User, ItemTarget.UserPets, ItemTarget.UserAndPets, ItemTarget.MasterOrUser, ItemTarget.MasterOrUserPets, ItemTarget.MasterOrUserAndPets };
+    private static readonly ItemTarget[] SelfTargets = { ItemTarget.User, ItemTarget.UserAndPets, ItemTarget.MasterOrUser, ItemTarget.MasterOrUserAndPets };
     private static readonly EffectType[] SelfOnlyEffects = { EffectType.Transform, EffectType.RevertTransform, EffectType.OpenPortal, EffectType.Discover };
 
     private static bool Friendly(SpellData spell) => spell.targetAlignment != Alignment.Evil;
@@ -77,7 +77,7 @@ public sealed partial class Plugin
     {
         var plugin = Active;
         var spell = overrideSpell != null ? overrideSpell : __instance.activeSpell;
-        if (plugin == null || plugin.VisualOnly || __instance != Player.PlayerChar || spell == null || !PartyTargets.Contains(spell.targetType)) return;
+        if (plugin == null || plugin.VisualOnly || __instance != Player.PlayerChar || spell == null || !PartyTargets.Contains(spell.targetType) || !__instance.Alive() || !__instance.HasSpellCosts(spell)) return;
         foreach (var partner in plugin.WorldPartners().Where(p => p.Actor != null && !p.Down)) partner.Actor!.WasHitBySpell(spell, __instance);
     }
 

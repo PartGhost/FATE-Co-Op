@@ -41,6 +41,7 @@ public sealed partial class Plugin
     private static readonly AccessTools.FieldRef<NPC, GameObject[]> PatrolRef = AccessTools.FieldRefAccess<NPC, GameObject[]>("patrolPoints");
     private static readonly AccessTools.FieldRef<PlayerUI, Button> LevelUpButtonRef = AccessTools.FieldRefAccess<PlayerUI, Button>("levelUpIndicator");
     private readonly Dictionary<NpcGreetings, GameObject> npcTemplates = new Dictionary<NpcGreetings, GameObject>();
+    private readonly HashSet<Tableflip.Scene> visitedHomes = new HashSet<Tableflip.Scene>();
     private Transform? npcCache;
     private Action? travelAfterBorrowing;
     private bool furnishing, borrowingNpcs;
@@ -59,7 +60,7 @@ public sealed partial class Plugin
 
     private void FurnishTown()
     {
-        var homes = BorrowedNpcs.Where(b => !npcTemplates.ContainsKey(b.Npc)).Select(b => b.Home).Distinct().ToList();
+        var homes = BorrowedNpcs.Where(b => !npcTemplates.ContainsKey(b.Npc) && !visitedHomes.Contains(b.Home)).Select(b => b.Home).Distinct().ToList();
         if (homes.Count == 0) PlaceTownNpcs();
         else if (!furnishing) StartCoroutine(BorrowNpcs(homes));
     }
@@ -67,17 +68,24 @@ public sealed partial class Plugin
     private IEnumerator BorrowNpcs(List<Tableflip.Scene> homes)
     {
         furnishing = true;
-        foreach (var home in homes)
+        try
         {
-            borrowingNpcs = true;
-            yield return SceneManager.LoadSceneAsync((int)home, LoadSceneMode.Additive);
-            yield return SceneManager.UnloadSceneAsync((int)home);
+            foreach (var home in homes)
+            {
+                visitedHomes.Add(home);
+                borrowingNpcs = true;
+                yield return SceneManager.LoadSceneAsync((int)home, LoadSceneMode.Additive);
+                yield return SceneManager.UnloadSceneAsync((int)home);
+            }
         }
-        furnishing = false;
-        var travel = travelAfterBorrowing;
-        travelAfterBorrowing = null;
-        if (travel != null) travel();
-        else if (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove) PlaceTownNpcs();
+        finally
+        {
+            furnishing = borrowingNpcs = false;
+            var travel = travelAfterBorrowing;
+            travelAfterBorrowing = null;
+            if (travel != null) travel();
+            else if (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove) PlaceTownNpcs();
+        }
     }
 
     private void KeepBorrowedNpcs(UnityEngine.SceneManagement.Scene scene)

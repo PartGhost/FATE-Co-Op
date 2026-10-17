@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using HarmonyLib;
 using Tableflip;
 
@@ -7,6 +8,7 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private static bool sortingBag;
+    private static readonly List<(Stash stash, Item item)> sortedOut = new List<(Stash, Item)>();
 
     private void InstallBagSortHooks()
     {
@@ -23,6 +25,8 @@ public sealed partial class Plugin
     private static Exception? AfterBagSort(Exception __exception)
     {
         sortingBag = false;
+        foreach (var (stash, item) in sortedOut) stash.GetItems().Remove(item);
+        sortedOut.Clear();
         return __exception;
     }
 
@@ -34,7 +38,7 @@ public sealed partial class Plugin
     private static bool BeforeSortedStashRemove(Stash __instance, Item item)
     {
         if (!sortingBag) return true;
-        __instance.GetItems().Remove(item);
+        sortedOut.Add((__instance, item));
         return false;
     }
 }

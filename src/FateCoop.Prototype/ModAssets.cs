@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using HarmonyLib;
@@ -33,9 +34,11 @@ public sealed partial class Plugin
         assetHolder.gameObject.SetActive(false);
         Object.DontDestroyOnLoad(assetHolder.gameObject);
         var db = SingletonBehaviour<FateDB>.Instance;
-        AddPortalBackFace(db);
-        PrepareDungeonProps(db);
-        PrepareExperienceGems(db);
+        foreach (var (name, step) in new (string, Action<FateDB>)[] { ("portal back face", AddPortalBackFace), ("dungeon props", PrepareDungeonProps), ("Sagestones", PrepareExperienceGems) })
+        {
+            try { step(db); }
+            catch (Exception e) { Logger.LogError($"Couldn't set up the {name}: {e}"); }
+        }
     }
 
     private GameObject CopyAsset(GameObject source, string? name = null)

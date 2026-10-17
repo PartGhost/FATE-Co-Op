@@ -11,7 +11,6 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    private const int MaxHudRows = 7;
     private static readonly AccessTools.FieldRef<PlayerUI, PartyUI> PartyUiRef = AccessTools.FieldRefAccess<PlayerUI, PartyUI>("partyUI");
     private static readonly AccessTools.FieldRef<PartyUI, PartyPetUI> PetSlotRef = AccessTools.FieldRefAccess<PartyUI, PartyPetUI>("petUI");
     private static readonly AccessTools.FieldRef<PartyUI, PartyMemberUI[]> AllySlotsRef = AccessTools.FieldRefAccess<PartyUI, PartyMemberUI[]>("partyMemberUIs");
@@ -21,7 +20,7 @@ public sealed partial class Plugin
     private static readonly AccessTools.FieldRef<PartyCharacterUI, TextMeshProUGUI> SlotNameRef = AccessTools.FieldRefAccess<PartyCharacterUI, TextMeshProUGUI>("nameText");
     private static readonly AccessTools.FieldRef<PartyCharacterUI, RawImage> SlotPictureRef = AccessTools.FieldRefAccess<PartyCharacterUI, RawImage>("profilePictureImage");
     private PlayerUI? hudOwner;
-    private float nextHudSearch;
+    private float nextHudSearch, partySpacing;
 
     private static T CloneSlot<T>(T source, Transform before) where T : PartyCharacterUI
     {
@@ -49,17 +48,29 @@ public sealed partial class Plugin
             nextHudSearch = Time.unscaledTime + 1f;
             hudOwner = Object.FindObjectOfType<PlayerUI>();
             if (hudOwner == null) return;
+            partySpacing = PartyUiRef(hudOwner).GetComponent<VerticalLayoutGroup>().spacing;
             foreach (var partner in partners.Values) partner.DestroyHud();
         }
         UpdateProgressBar();
         var party = PartyUiRef(hudOwner);
         var allies = AllySlotsRef(party);
+        var petSlot = PetSlotRef(party);
         var blocker = PartyBlockerRef(party).transform;
-        party.GetComponent<VerticalLayoutGroup>().childScaleHeight = true;
-        var gameRows = allies.Count(slot => slot.gameObject.activeSelf) + (PetSlotRef(party).gameObject.activeSelf ? 1 : 0);
+        var layout = party.GetComponent<VerticalLayoutGroup>();
+        layout.childScaleHeight = true;
+        var gameSlots = allies.Append<PartyCharacterUI>(petSlot).Where(slot => slot.gameObject.activeSelf).ToList();
         var visible = partners.Values.Where(p => p.Frame != null && p.Name.Length > 0).ToList();
-        var showPets = visible.Count * 2 + gameRows <= MaxHudRows;
-        var scale = Mathf.Min(1f, (float)(MaxHudRows - gameRows) / (visible.Count * (showPets ? 2 : 1)));
+        var canvas = (RectTransform)party.GetComponentInParent<Canvas>().rootCanvas.transform;
+        var room = canvas.InverseTransformPoint(party.transform.position).y - canvas.rect.yMin - gameSlots.Sum(slot => ((RectTransform)slot.transform).rect.height);
+        var allyRect = (RectTransform)allies[0].transform;
+        var nameText = SlotNameRef(allies[0]);
+        var nameBottom = allyRect.InverseTransformPoint(nameText.rectTransform.TransformPoint(0f, nameText.rectTransform.rect.yMin, 0f)).y;
+        var nameOverhang = allyRect.rect.yMin - nameBottom + nameText.fontSize;
+        var petHeight = ((RectTransform)petSlot.transform).rect.height;
+        float FitScale(bool pets) => Mathf.Min(1f, room / (visible.Count * (allyRect.rect.height + (pets ? petHeight : 0f)) + Mathf.Max(0, gameSlots.Count + visible.Count * (pets ? 2 : 1) - 1) * partySpacing + nameOverhang));
+        var showPets = FitScale(true) >= 1f;
+        var scale = FitScale(showPets);
+        layout.spacing = partySpacing * scale;
         foreach (var partner in partners.Values.Except(visible)) partner.DestroyHud();
         foreach (var partner in visible)
         {

@@ -77,6 +77,8 @@ public sealed partial class Plugin : BaseUnityPlugin
         catch (Exception exception)
         {
             Logger.LogError(exception);
+            harmony?.UnpatchSelf();
+            Active = null;
             enabled = false;
         }
     }
@@ -113,6 +115,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private void BeginWorldChange()
     {
+        ReleaseSharedGround();
         worldEpoch++;
         transitioning = true;
         worldReady = false;

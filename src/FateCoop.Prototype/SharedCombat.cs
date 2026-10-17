@@ -131,10 +131,12 @@ public sealed partial class Plugin
 
     private Character? TopThreat(Monster monster) => threat.TryGetValue(monster, out var table) ? table.OrderByDescending(e => Decayed(e.Value)).Select(e => e.Key).FirstOrDefault() : null;
 
-    private static void AfterRespondToAttack(Monster __instance)
+    private static void AfterRespondToAttack(Monster __instance, Character attacker)
     {
         var plugin = Active;
-        if (plugin == null || !plugin.OwnsWorld || !plugin.threat.TryGetValue(__instance, out var table) || !__instance.Alive() || __instance.PerformingAttack() || __instance.PerformingCast()) return;
+        if (plugin == null || !plugin.OwnsWorld) return;
+        if (plugin.PartnerOf(attacker) != null && __instance.Target() == Player.PlayerChar) __instance.SetTarget(attacker);
+        if (!plugin.threat.TryGetValue(__instance, out var table) || !__instance.Alive() || __instance.PerformingAttack() || __instance.PerformingCast()) return;
         var reach = __instance.monsterData.followRadius * 0.25f;
         var best = table.Where(e => e.Key != null && e.Key.Alive() && !e.Key.IsPassedOut() && e.Key.GetAlignment() != __instance.GetAlignment()
             && (e.Key.transform.position - __instance.transform.position).magnitude < reach).OrderByDescending(e => Decayed(e.Value)).FirstOrDefault();
@@ -247,7 +249,8 @@ public sealed partial class Plugin
         var plugin = Active;
         if (plugin == null || !plugin.OwnsWorld || !plugin.WorldPartners().Any() || !(__instance.Char is Monster monster) || !plugin.monsterIds.TryGetValue(monster, out var id) || __instance.IsDead) return;
         var killer = plugin.PartnerOf(finalData?.source?.Char ?? plugin.TopThreat(monster))?.Id ?? plugin.myId;
-        plugin.SendWorld("kill", string.Join("|", id, monster.GetExperienceReward(), monster.GetFameReward(), killer));
+        var rewarded = finalData != null || !monster.IsSummoned();
+        plugin.SendWorld("kill", string.Join("|", id, rewarded ? monster.GetExperienceReward() : 0, rewarded ? monster.GetFameReward() : 0, killer));
         plugin.killsSent++;
     }
 
@@ -449,6 +452,7 @@ public sealed partial class Plugin
             }
             if (!SharedWorldReady()) continue;
             if (!monsters.TryGetValue(state.Id, out var monster) || monster == null) monster = SpawnMirror(state);
+            if (monster == null) continue;
             monsterStates[state.Id] = state;
             monster.maxHpBase = Mathf.RoundToInt(state.MaxHp);
             monster.hp = state.Hp;
@@ -469,11 +473,11 @@ public sealed partial class Plugin
         bar.poisonBarFill.localScale = scale;
     }
 
-    private Monster SpawnMirror(MonsterState state)
+    private Monster? SpawnMirror(MonsterState state)
     {
         var data = SingletonBehaviour<FateDB>.Instance.allMonsters.FirstOrDefault(m => m != null && m.displayName == state.Key);
         if (data == null || data.modelPrefab == null) throw new InvalidOperationException("Monster model is unavailable: " + state.Key);
-        if (!NavMesh.SamplePosition(state.Position, out var hit, 3f, NavMesh.AllAreas)) throw new InvalidOperationException("Monster position has no navigation surface.");
+        if (!NavMesh.SamplePosition(state.Position, out var hit, 3f, NavMesh.AllAreas)) return null;
         var obj = UnityEngine.Object.Instantiate(data.modelPrefab, hit.position, Quaternion.Euler(0, state.Yaw, 0));
         var monster = obj.GetComponent<Monster>();
         if (monster == null) { UnityEngine.Object.Destroy(obj); throw new InvalidOperationException("Monster prefab is invalid: " + state.Key); }
@@ -560,9 +564,8 @@ public sealed partial class Plugin
         strikesTaken++;
     }
 
-    private void TakeHurt(Partner partner, string body)
+    private void TakeHurt(string body)
     {
-        if (partner.Id != worldOwner) return;
         var parts = body.Split('|');
         if (parts.Length != 4) throw new InvalidOperationException("Invalid damage.");
         var value = ParseInt(parts[1]);

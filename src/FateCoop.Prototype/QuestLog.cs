@@ -11,7 +11,7 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const int VisibleQuestRows = 3;
-    private const float QuestScrollSpeed = 35f;
+    private const float ScrollSpeed = 35f;
     private static readonly AccessTools.FieldRef<QuestUI, QuestEntryUI[]> SideQuestRowsRef = AccessTools.FieldRefAccess<QuestUI, QuestEntryUI[]>("sideQuests");
     private static readonly AccessTools.FieldRef<QuestUI, QuestEntryUI> MainQuestRowRef = AccessTools.FieldRefAccess<QuestUI, QuestEntryUI>("mainQuest");
 
@@ -54,32 +54,39 @@ public sealed partial class Plugin
         var group = rows[0].transform.parent;
         var rowRect = (RectTransform)rows[0].transform;
         var spacing = group.GetComponent<VerticalLayoutGroup>().spacing;
-        var viewport = new GameObject("FateCoop_SideQuestScroll", typeof(RectTransform), typeof(RectMask2D), typeof(ScrollRect)).GetComponent<RectTransform>();
-        viewport.SetParent(group, false);
+        var scroll = CreateScrollList("FateCoop_SideQuestScroll", group, spacing);
+        var viewport = scroll.viewport;
         viewport.SetSiblingIndex(rowRect.GetSiblingIndex());
         viewport.anchorMin = viewport.anchorMax = rowRect.anchorMin;
         viewport.pivot = rowRect.pivot;
         viewport.sizeDelta = new Vector2(rowRect.sizeDelta.x, VisibleQuestRows * rowRect.sizeDelta.y + (VisibleQuestRows - 1) * spacing);
+        var layout = scroll.content.GetComponent<VerticalLayoutGroup>();
+        layout.childAlignment = TextAnchor.UpperCenter;
+        layout.childControlWidth = layout.childControlHeight = layout.childForceExpandWidth = layout.childForceExpandHeight = false;
+        foreach (var row in rows) row.transform.SetParent(scroll.content, false);
+        return scroll.content;
+    }
+
+    private static ScrollRect CreateScrollList(string name, Transform parent, float spacing)
+    {
+        var viewport = new GameObject(name, typeof(RectTransform), typeof(RectMask2D), typeof(ScrollRect)).GetComponent<RectTransform>();
+        viewport.SetParent(parent, false);
         var content = new GameObject("Content", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter)).GetComponent<RectTransform>();
         content.SetParent(viewport, false);
         content.anchorMin = new Vector2(0f, 1f);
         content.anchorMax = Vector2.one;
         content.pivot = new Vector2(0.5f, 1f);
         content.sizeDelta = Vector2.zero;
-        var layout = content.GetComponent<VerticalLayoutGroup>();
-        layout.spacing = spacing;
-        layout.childAlignment = TextAnchor.UpperCenter;
-        layout.childControlWidth = layout.childControlHeight = layout.childForceExpandWidth = layout.childForceExpandHeight = false;
+        content.GetComponent<VerticalLayoutGroup>().spacing = spacing;
         content.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
         var scroll = viewport.GetComponent<ScrollRect>();
         scroll.horizontal = false;
         scroll.movementType = ScrollRect.MovementType.Clamped;
-        scroll.scrollSensitivity = QuestScrollSpeed;
+        scroll.scrollSensitivity = ScrollSpeed;
         scroll.viewport = viewport;
         scroll.content = content;
-        foreach (var row in rows) row.transform.SetParent(content, false);
-        viewport.gameObject.AddComponent<QuestScrollFollower>().Scroll = scroll;
-        return content;
+        viewport.gameObject.AddComponent<ScrollFollower>().Scroll = scroll;
+        return scroll;
     }
 
     private static void AfterQuestLog(QuestUI __instance, RealmData.RealmId realm)
@@ -109,7 +116,7 @@ public sealed partial class Plugin
     }
 }
 
-public sealed class QuestScrollFollower : MonoBehaviour
+public sealed class ScrollFollower : MonoBehaviour
 {
     public ScrollRect? Scroll;
 

@@ -56,7 +56,7 @@ public sealed partial class Plugin
     {
         var plugin = Active;
         var spell = overrideSpell != null ? overrideSpell : __instance.activeSpell;
-        if (plugin == null || __instance != Player.PlayerChar || spell == null) return;
+        if (plugin == null || __instance != Player.PlayerChar || spell == null || !__instance.Alive() || !__instance.HasSpellCosts(spell)) return;
         plugin.localSpells++;
         plugin.localSpellName = spell.spellName;
         plugin.localSpellAim = targetPosition ?? (targetChar != null ? targetChar.transform.position : __instance.transform.position + __instance.transform.forward * 150f);
@@ -147,14 +147,17 @@ public sealed partial class Plugin
     private void PlayReplicaVisuals(Partner partner, PeerFrame frame)
     {
         var actor = partner.Actor!;
-        ShowEffects(actor, frame.effects);
-        if (partner.Arrows >= 0 && frame.arrows != partner.Arrows && FinitePosition(frame.arrowEnd)) DrawReplicaArrow(partner, frame.arrowEnd);
-        if (partner.LevelUps >= 0 && frame.levelUps != partner.LevelUps) PlayReplicaLevelUp(actor);
-        if (partner.Spells >= 0 && frame.spells != partner.Spells && FinitePosition(frame.spellAim)) ReplaySpell(actor, frame.spellName, frame.spellAim, frame.spellTarget);
+        var shot = partner.Arrows >= 0 && frame.arrows != partner.Arrows && FinitePosition(frame.arrowEnd);
+        var leveled = partner.LevelUps >= 0 && frame.levelUps != partner.LevelUps;
+        var spelled = partner.Spells >= 0 && frame.spells != partner.Spells && FinitePosition(frame.spellAim);
         partner.Arrows = frame.arrows;
         partner.LevelUps = frame.levelUps;
         partner.Spells = frame.spells;
+        ShowEffects(actor, frame.effects);
         ShowReplicaFishing(partner, frame.fishing);
+        if (shot) DrawReplicaArrow(partner, frame.arrowEnd);
+        if (leveled) PlayReplicaLevelUp(actor);
+        if (spelled) ReplaySpell(actor, frame.spellName, frame.spellAim, frame.spellTarget);
     }
 
     private void DrawReplicaArrow(Partner partner, Vector3 end)
@@ -207,6 +210,7 @@ public sealed partial class Plugin
         caster.SetTarget(targetChar);
         MasterRef(caster) = null!;
         var onMe = targetChar == Player.PlayerChar && SelfTargets.Contains(spell.targetType);
+        var (ownTarget, ownSpell) = (redirectTarget, redirectSpell);
         if (onMe)
         {
             redirectTarget = Player.PlayerChar;
@@ -223,11 +227,7 @@ public sealed partial class Plugin
         {
             visualDepth--;
             MasterRef(caster) = master;
-            if (onMe)
-            {
-                redirectTarget = null;
-                redirectSpell = null;
-            }
+            (redirectTarget, redirectSpell) = (ownTarget, ownSpell);
         }
     }
 

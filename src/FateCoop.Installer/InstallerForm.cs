@@ -1,5 +1,9 @@
 ﻿using System;
 using System.Drawing;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Runtime.Serialization;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -14,6 +18,7 @@ internal sealed class InstallerForm : Form
     private readonly Button installButton = new Button { Text = "Install", AutoSize = true };
     private readonly Button updateButton = new Button { Text = "Update", AutoSize = true };
     private readonly Button removeButton = new Button { Text = "Remove", AutoSize = true };
+    private readonly Button retryButton = new Button { Text = "Try again", AutoSize = true };
     private string? game;
     private string? latestVersion, latestUrl;
     private bool busy;
@@ -28,7 +33,7 @@ internal sealed class InstallerForm : Form
         Padding = new Padding(12);
         Font = new Font("Segoe UI", 10f);
         var buttons = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 12, 0, 12) };
-        buttons.Controls.AddRange(new Control[] { installButton, updateButton, removeButton });
+        buttons.Controls.AddRange(new Control[] { installButton, updateButton, removeButton, retryButton });
         var layout = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
         layout.Controls.AddRange(new Control[] { gameLabel, browseButton, versionLabel, buttons, statusLabel });
         Controls.Add(layout);
@@ -36,8 +41,14 @@ internal sealed class InstallerForm : Form
         installButton.Click += async (_, _) => await Run(InstallLatest);
         updateButton.Click += async (_, _) => await Run(InstallLatest);
         removeButton.Click += async (_, _) => await Run(Remove);
-        game = ModFiles.FindGame();
-        Shown += async (_, _) => await Run(CheckLatest);
+        retryButton.Click += async (_, _) => await Run(CheckLatest);
+        FormClosing += (_, e) =>
+        {
+            if (!busy) return;
+            e.Cancel = true;
+            statusLabel.Text = "Wait until this finishes, so the game isn't left half changed.";
+        };
+        Shown += async (_, _) => await Run(FindAndCheck);
     }
 
     private void UpdateView()
@@ -49,6 +60,7 @@ internal sealed class InstallerForm : Form
         installButton.Enabled = !busy && game != null && installed == null && latestUrl != null;
         updateButton.Enabled = !busy && installed != null && latestUrl != null;
         removeButton.Enabled = !busy && installed != null;
+        retryButton.Visible = !busy && latestUrl == null;
     }
 
     private void Browse()
@@ -67,9 +79,18 @@ internal sealed class InstallerForm : Form
         UpdateView();
         try { statusLabel.Text = await action(); }
         catch (UnauthorizedAccessException) { statusLabel.Text = "Windows blocked changes to the game folder. Right-click the installer and choose Run as administrator."; }
+        catch (HttpRequestException) { statusLabel.Text = "Couldn't reach GitHub. Check your internet connection and try again."; }
+        catch (TaskCanceledException) { statusLabel.Text = "GitHub took too long to answer. Try again."; }
+        catch (InvalidDataException) { statusLabel.Text = "The download was damaged. Try again."; }
         catch (Exception e) { statusLabel.Text = e.Message; }
         busy = false;
         UpdateView();
+    }
+
+    private async Task<string> FindAndCheck()
+    {
+        game = ModFiles.FindGame();
+        return await CheckLatest();
     }
 
     private async Task<string> CheckLatest()
@@ -90,7 +111,11 @@ internal sealed class InstallerForm : Form
 
     private async Task<string> Remove()
     {
+        string[] warnings;
+        try { warnings = ModFiles.RemovalWarnings().ToArray(); }
+        catch (Exception e) when (e is SerializationException || e is ArgumentException || e is IOException) { warnings = Array.Empty<string>(); }
+        if (warnings.Length > 0 && MessageBox.Show(this, string.Join("\n\n", warnings) + "\n\nRemove anyway?", "FATE Co-Op", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return "Nothing was removed.";
         var loaderRemoved = await Task.Run(() => ModFiles.Remove(game!));
-        return loaderRemoved ? "Removed. FATE is back to normal." : "Removed FATE Co-Op. BepInEx was left in place because other mods use it.";
+        return loaderRemoved ? "Removed. FATE is back to normal." : "Removed FATE Co-Op. BepInEx stays because other mods use it or it was there before.";
     }
 }

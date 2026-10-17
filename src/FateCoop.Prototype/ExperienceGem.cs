@@ -17,6 +17,7 @@ public sealed partial class Plugin
         ("Item_SuperiorRuby", "Item_SuperiorSagestone", "Superior Sagestone", 6), ("Item_PerfectRuby", "Item_PerfectSagestone", "Perfect Sagestone", 8),
         ("Item_DivineRuby", "Item_DivineSagestone", "Divine Sagestone", 10)
     };
+    private static readonly System.Reflection.MethodInfo SetSpriteMethod = AccessTools.Method(typeof(Item), "SetSprite");
     private static readonly AccessTools.FieldRef<Character, Dictionary<ActivationType, List<AppliedEffect>>> EffectsRef = AccessTools.FieldRefAccess<Character, Dictionary<ActivationType, List<AppliedEffect>>>("effects");
 
     private void InstallExperienceGemHooks()
@@ -24,6 +25,23 @@ public sealed partial class Plugin
         harmony!.Patch(AccessTools.Method(typeof(Character), "AwardExperience"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeAwardExperience)));
         harmony.Patch(AccessTools.PropertyGetter(typeof(EffectData), "IsPositive"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterEffectPositive)));
         harmony.Patch(AccessTools.Method(typeof(EffectData), "GenerateTooltipString"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterEffectTooltip)));
+        harmony.Patch(AccessTools.Method(typeof(Item), "FillInstance"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterItemSaved)));
+        harmony.Patch(AccessTools.Method(typeof(Item), "ApplyInstance"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterItemLoaded)));
+    }
+
+    private static void AfterItemSaved(Item __instance, ItemSaveData pInstance)
+    {
+        var gem = ExperienceGems.FirstOrDefault(g => g.Key == __instance.itemBaseName);
+        if (gem.Key != null) pInstance.baseName = gem.Source;
+    }
+
+    private static void AfterItemLoaded(Item __instance)
+    {
+        var gem = ExperienceGems.FirstOrDefault(g => g.Key == __instance.itemName && g.Source == __instance.itemBaseName);
+        if (gem.Key == null) return;
+        __instance.itemData = SingletonBehaviour<FateDB>.Instance.AllItems.First(item => item.displayName == gem.Key);
+        __instance.itemBaseName = gem.Key;
+        SetSpriteMethod.Invoke(__instance, new object[] { __instance.itemData.IconName });
     }
 
     private void PrepareExperienceGems(FateDB db)

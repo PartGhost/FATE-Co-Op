@@ -304,6 +304,9 @@ public sealed partial class Plugin
                 var questLog = Object.FindObjectOfType<QuestUI>();
                 UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(SideQuestRowsRef(questLog).Last(row => row.gameObject.activeSelf).questButton.gameObject);
                 break;
+            case "test-goto-scroll":
+                UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(goToButtons.Last(button => button.gameObject.activeSelf).gameObject);
+                break;
             case "test-summon":
                 var summoner = Player.PlayerChar;
                 var summon = SingletonBehaviour<FateDB>.Instance.allSpells.First(s => s != null && s.IsSummonSpell());
@@ -420,6 +423,10 @@ public sealed partial class Plugin
                 var receiver = Player.PlayerChar;
                 if (!receiver.AddItemToInventory(new Item(SingletonBehaviour<FateDB>.Instance.AllItems.First(i => i.displayName == parts[1])), AddItemReason.Loot)) throw new InvalidOperationException("No room for " + parts[1]);
                 break;
+            case "test-bag":
+                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), Player.PlayerChar.inventory.SelectMany(i => new[] { i }.Concat(i.sockedtedItems ?? Enumerable.Empty<Item>()))
+                    .Select(i => $"{i.itemBaseName} | name={i.itemName} | display={i.itemData?.displayName} | effects=[{string.Join("; ", i.itemData?.itemEffects.Select(e => e.buffType + " " + e.value) ?? Enumerable.Empty<string>())}]"));
+                break;
             case "test-socket":
                 var socketer = Player.PlayerChar;
                 var socketed = socketer.inventory.First(i => i.equipped && i.IsInMainHand);
@@ -465,6 +472,17 @@ public sealed partial class Plugin
                 var templates = Resources.FindObjectsOfTypeAll<TemplateData>();
                 File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), Resources.FindObjectsOfTypeAll<PropData>().Where(p => p.modelPrefab != null).OrderBy(p => p.modelPrefab.name).Select(p =>
                     $"{p.propName} | {p.modelPrefab.name} | [{string.Join(", ", p.modelPrefab.GetComponentsInChildren<Component>(true).Where(c => c != null && !(c is Transform)).Select(c => c.GetType().Name).Distinct())}] | {string.Join(", ", templates.Where(t => t.props != null && t.props.Contains(p)).Select(t => t.templateName))}"));
+                break;
+            case "test-fake-friends":
+                for (var friend = 1; friend <= int.Parse(parts[1], CultureInfo.InvariantCulture); friend++)
+                {
+                    var fake = PartnerFor(HostId + friend);
+                    fake.Name = friend % 3 == 0 ? "AVeryLongSteamNameForTesting" + friend : "Friend " + friend;
+                    fake.LastMessage = float.PositiveInfinity;
+                    fake.Frame = friend % 4 == 0
+                        ? new PeerFrame { worldKey = TownKey, scene = Tableflip.Scene.Town_Grove.ToString(), hp = 80, maxHp = 100, mana = 40, maxMana = 100, level = friend }
+                        : new PeerFrame { worldKey = "fake-" + friend, scene = Tableflip.Scene.Dungeon.ToString(), depth = friend * 3, hp = 50, maxHp = 100, mana = 70, maxMana = 100, level = friend };
+                }
                 break;
             case "quit": Application.Quit(); break;
             default: throw new ArgumentException("Unknown prototype command: " + parts[0]);
@@ -524,7 +542,7 @@ public sealed partial class Plugin
     private static void DumpObject(Transform node, List<string> lines, int depth, int maxDepth)
     {
         var indent = new string(' ', depth * 2);
-        lines.Add($"{indent}{node.name} active={node.gameObject.activeSelf}/{node.gameObject.activeInHierarchy} layer={LayerMask.LayerToName(node.gameObject.layer)} pos={node.position} local={node.localPosition} scale={node.localScale} lossy={node.lossyScale} rot={node.eulerAngles}");
+        lines.Add($"{indent}{node.name} active={node.gameObject.activeSelf}/{node.gameObject.activeInHierarchy} layer={LayerMask.LayerToName(node.gameObject.layer)} pos={node.position} local={node.localPosition} scale={node.localScale} lossy={node.lossyScale} rot={node.eulerAngles}" + (node is RectTransform rect ? $" rect={rect.rect}" : ""));
         foreach (var component in node.GetComponents<Component>())
         {
             if (component == null || component is Transform) continue;
@@ -533,7 +551,7 @@ public sealed partial class Plugin
                 Renderer r => $" enabled={r.enabled} materials=[{string.Join(", ", r.sharedMaterials.Where(m => m != null).Select(m => m.name + "/" + m.shader.name + "/" + (m.mainTexture != null ? m.mainTexture.name : "-") + "/" + (m.HasProperty("_Color") ? m.color.ToString() : "-")))}]" + (r is SpriteRenderer s ? $" sprite={(s.sprite != null ? s.sprite.name : "-")} color={s.color} size={s.size}" : ""),
                 MeshFilter f => " mesh=" + (f.sharedMesh != null ? f.sharedMesh.name + " bounds=" + f.sharedMesh.bounds : "-"),
                 Collider c => $" enabled={c.enabled} bounds={c.bounds}",
-                MonoBehaviour m when m.GetType().Namespace == nameof(Tableflip) => " enabled=" + m.enabled + " json=" + JsonUtility.ToJson(m),
+                MonoBehaviour m when m.GetType().Namespace is nameof(Tableflip) or "UnityEngine.UI" =>" enabled=" + m.enabled + " json=" + JsonUtility.ToJson(m),
                 Behaviour b => " enabled=" + b.enabled,
                 _ => ""
             };

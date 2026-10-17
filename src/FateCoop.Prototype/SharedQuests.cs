@@ -18,7 +18,8 @@ public sealed partial class Plugin
     private string sentQuests = "", sharedQuestsJson = "", reportedProgress = "";
     private List<Quest>? ownSideQuests;
     private float nextQuestSync;
-    private int questRewardsSent, questRewardsTaken, claimRequester = Unassigned;
+    private int questRewardsSent, questRewardsTaken;
+    private readonly HashSet<string> claimedQuests = new HashSet<string>();
 
     [Serializable] private sealed class QuestList
     {
@@ -146,6 +147,7 @@ public sealed partial class Plugin
         if (ownSideQuests != null && SingletonBehaviour<QuestManager>.InstanceExists()) SideQuests[QuestRealm] = ownSideQuests;
         ownSideQuests = null;
         sharedQuestsJson = sentQuests = reportedProgress = "";
+        claimedQuests.Clear();
     }
 
     private void MergeProgress(string body)
@@ -193,7 +195,9 @@ public sealed partial class Plugin
     {
         var plugin = Active;
         var quest = plugin != null && plugin.MirroringQuests ? SideQuests[QuestRealm].FirstOrDefault(q => q != null && q.QuestGiverName == questGiver) : null;
-        if (quest != null && quest.Status == Quest.QuestStatus.Completed) plugin!.Send("quest-claim", JsonUtility.ToJson(ProgressOf(quest)), HostId);
+        if (quest == null || quest.Status != Quest.QuestStatus.Completed) return;
+        plugin!.claimedQuests.Add(QuestTitle(quest));
+        plugin.Send("quest-claim", JsonUtility.ToJson(ProgressOf(quest)), HostId);
     }
 
     private void TakeQuestAccept(string body)
@@ -214,21 +218,16 @@ public sealed partial class Plugin
         if (quest != null) Quests.CancelQuest(quest);
     }
 
-    private void TakeQuestClaim(Partner partner, string body)
+    private void TakeQuestClaim(string body)
     {
         if (!isHost) return;
         var progress = JsonUtility.FromJson<QuestProgress>(body);
         var quest = SideQuests[QuestRealm].FirstOrDefault(q => q != null && q.QuestGiverName == progress.giver && q.QuestId == progress.questId);
         if (quest == null) return;
         Advance(quest, progress);
-        claimRequester = partner.Id;
         soundEmitter = Nowhere;
         try { Quests.ClaimRewards(progress.giver); }
-        finally
-        {
-            claimRequester = Unassigned;
-            soundEmitter = null;
-        }
+        finally { soundEmitter = null; }
     }
 
     private static void BeforeClaimRewards(Quest __instance)
@@ -241,7 +240,7 @@ public sealed partial class Plugin
             item = __instance.ItemReward != null ? __instance.ItemReward.GetItemSave() : new ItemSaveData(),
             questItems = new[] { __instance.questItem?.itemSaveData, __instance.uniqueQuestMonster?.targetItem?.itemSaveData }.OfType<ItemSaveData>().Where(data => !string.IsNullOrEmpty(data.baseName)).ToList()
         });
-        foreach (var partner in plugin.partners.Values.Where(p => p.Id != plugin.claimRequester)) plugin.Send("quest-reward", reward, partner.Id);
+        plugin.Send("quest-reward", reward);
         plugin.questRewardsSent++;
     }
 
@@ -278,7 +277,7 @@ public sealed partial class Plugin
         var reward = JsonUtility.FromJson<QuestReward>(body);
         if (reward == null || reward.gold < 0 || reward.experience < 0 || reward.fame < 0) throw new InvalidOperationException("Invalid quest reward.");
         var player = Player.PlayerChar;
-        if (player == null) return;
+        if (player == null || claimedQuests.Remove(reward.quest)) return;
         SingletonBehaviour<PlayerStatus>.Instance.AddGold((uint)reward.gold);
         player.AwardExperience(reward.experience, fromMaster: false);
         player.AwardFame((uint)reward.fame);

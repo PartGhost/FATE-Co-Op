@@ -158,14 +158,16 @@ public sealed partial class Plugin
             if (partner.Actor == null) return;
         }
         partner.Trail.Add(frame.time, hit.position, frame.primaryYaw);
-        ApplyCompanion(partner, partner.Pet, JsonUtility.FromJson<PetSnapshot>(frame.petJson), frame.time);
-        ApplySummons(partner, frame.summonJson.Select(JsonUtility.FromJson<PetSnapshot>).ToList(), frame.time);
-        if (partner.Swings >= 0 && frame.swings != partner.Swings) PlayReplicaSwing(partner, frame.swingSpeed);
-        if (partner.Casts >= 0 && frame.casts != partner.Casts) PlayReplicaCast(partner, frame.castSpell);
+        var swung = partner.Swings >= 0 && frame.swings != partner.Swings;
+        var cast = partner.Casts >= 0 && frame.casts != partner.Casts;
         partner.Swings = frame.swings;
         partner.Casts = frame.casts;
-        ShowReplicaDown(partner, frame.hp <= 0 && frame.maxHp > 0);
+        ShowReplicaDown(partner, PartnerDown(partner));
         PlayReplicaVisuals(partner, frame);
+        if (swung) PlayReplicaSwing(partner, frame.swingSpeed);
+        if (cast) PlayReplicaCast(partner, frame.castSpell);
+        ApplyCompanion(partner, partner.Pet, JsonUtility.FromJson<PetSnapshot>(frame.petJson), frame.time);
+        ApplySummons(partner, frame.summonJson.Select(JsonUtility.FromJson<PetSnapshot>).ToList(), frame.time);
     }
 
     private static string LocalName() => SteamReady ? SteamFriends.GetPersonaName() : Player.PlayerChar.CharacterName;

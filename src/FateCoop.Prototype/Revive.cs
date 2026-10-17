@@ -87,8 +87,8 @@ public sealed partial class Plugin
         EndDowned();
         if (Player.PlayerChar == null) return;
         dyingForReal = true;
-        Player.PlayerChar.MyVitals.Die();
-        dyingForReal = false;
+        try { Player.PlayerChar.MyVitals.Die(); }
+        finally { dyingForReal = false; }
     }
 
     private void UpdateRevive()

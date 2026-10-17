@@ -11,11 +11,13 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.20.0";
+    internal const string Version = "0.21.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     internal const int HostId = 0;
     private const int Everyone = -1, Unassigned = -2;
     private const float FrameInterval = 0.05f, AwayFrameInterval = 0.5f, PeerTimeout = 10f;
+    private static readonly HashSet<string> OwnerMessages = new HashSet<string> { "monsters", "strike", "hurt", "kill", "pop", "ground", "ground-gone", "ground-list", "fixture" };
+    private static readonly HashSet<string> HostMessages = new HashSet<string> { "quests", "quest-reward" };
     private IPeerLink? link;
     private bool isHost = true;
     private int myId = HostId;
@@ -96,13 +98,14 @@ public sealed partial class Plugin
             nextFrame = Time.unscaledTime + (WorldPartners().Any() ? FrameInterval : AwayFrameInterval);
             Send("frame", JsonUtility.ToJson(LocalFrame()), reliable: false);
         }
+        UpdateHeldTravel();
+        UpdateRevive();
         if (!Connected) return;
         SendProfileIfChanged();
         UpdateOwnership();
         if (OwnsWorld) { SyncMonsters(); SyncGround(); }
         SyncQuests();
         TrackPartnerTravel();
-        UpdateRevive();
     }
 
     private PeerFrame LocalFrame()
@@ -161,7 +164,14 @@ public sealed partial class Plugin
 
     private void Receive(int peer, byte[] bytes)
     {
-        var envelope = JsonUtility.FromJson<Envelope>(Encoding.UTF8.GetString(bytes));
+        Envelope envelope;
+        try { envelope = JsonUtility.FromJson<Envelope>(Encoding.UTF8.GetString(bytes)); }
+        catch (ArgumentException e)
+        {
+            networkRejected++;
+            Logger.LogWarning("PEER_MESSAGE_REJECTED unreadable from " + peer + ": " + e.Message);
+            return;
+        }
         if (envelope == null || envelope.version != Compatibility)
         {
             if (!isHost) { EndSession("Your friends run a different mod or game version (" + envelope?.version + ", this game runs " + Compatibility + ")."); return; }
@@ -176,18 +186,23 @@ public sealed partial class Plugin
             if (envelope.to != HostId && envelope.to != Everyone) { partners[peer].LastMessage = Time.unscaledTime; return; }
         }
         else lastHostMessage = Time.unscaledTime;
-        if (envelope.type == "welcome")
+        try
         {
-            if (worldOwner == myId) worldOwner = int.Parse(envelope.body);
-            myId = int.Parse(envelope.body);
-            return;
+            if (envelope.type == "welcome" || envelope.type == "left")
+            {
+                if (!isHost && envelope.from == HostId) TakeHostControl(envelope);
+                return;
+            }
+            if (envelope.from == myId) return;
+            var partner = PartnerFor(envelope.from);
+            partner.LastMessage = Time.unscaledTime;
+            if (envelope.world.Length > 0 && envelope.world != CurrentWorldKey())
+            {
+                if (envelope.type == "drop") Send("granted", envelope.body, partner.Id);
+                return;
+            }
+            Handle(partner, envelope);
         }
-        if (envelope.type == "left") { if (partners.TryGetValue(int.Parse(envelope.body), out var left)) DropPartner(left, " left."); return; }
-        if (envelope.from == myId) return;
-        var partner = PartnerFor(envelope.from);
-        partner.LastMessage = Time.unscaledTime;
-        if (envelope.world.Length > 0 && envelope.world != CurrentWorldKey()) return;
-        try { Handle(partner, envelope); }
         catch (Exception e)
         {
             networkRejected++;
@@ -195,8 +210,23 @@ public sealed partial class Plugin
         }
     }
 
+    private void TakeHostControl(Envelope envelope)
+    {
+        var id = ParseInt(envelope.body);
+        if (envelope.type == "left")
+        {
+            if (partners.TryGetValue(id, out var left)) DropPartner(left, " left.");
+            return;
+        }
+        if (worldOwner == myId) worldOwner = id;
+        myId = id;
+        sentProfileKey = "";
+        sentQuests = "";
+    }
+
     private void Handle(Partner partner, Envelope envelope)
     {
+        if ((OwnerMessages.Contains(envelope.type) && partner.Id != worldOwner) || (HostMessages.Contains(envelope.type) && partner.Id != HostId)) return;
         switch (envelope.type)
         {
             case "frame": ReceiveFrame(partner, JsonUtility.FromJson<PeerFrame>(envelope.body)); break;
@@ -206,7 +236,7 @@ public sealed partial class Plugin
             case "monsters": ReceiveMonsters(envelope.body); break;
             case "hit": ApplyHit(partner, envelope.body); break;
             case "strike": TakeStrike(envelope.body); break;
-            case "hurt": TakeHurt(partner, envelope.body); break;
+            case "hurt": TakeHurt(envelope.body); break;
             case "effect": TakeEffect(partner, envelope.body); break;
             case "kill": TakeKill(envelope.body); break;
             case "pop": ShowDamagePopup(envelope.body); break;
@@ -223,13 +253,12 @@ public sealed partial class Plugin
             case "quest-progress": MergeProgress(envelope.body); break;
             case "quest-accept": TakeQuestAccept(envelope.body); break;
             case "quest-cancel": TakeQuestCancel(envelope.body); break;
-            case "quest-claim": TakeQuestClaim(partner, envelope.body); break;
+            case "quest-claim": TakeQuestClaim(envelope.body); break;
             case "quest-reward": TakeQuestReward(envelope.body); break;
             case "use-ward": UseWard(envelope.body); break;
             case "revive": if (downed) StandUp(partner); break;
             case "chat": ReceiveChat(partner, envelope.body); break;
             case "reset-dungeons": TakeDungeonReset(partner); break;
-            case "mismatch": EndSession("Your friends run a different mod or game version (this game runs " + Compatibility + ")."); break;
             default: throw new InvalidOperationException("Unknown peer message: " + envelope.type);
         }
     }
@@ -275,7 +304,7 @@ public sealed partial class Plugin
         if (partner.TownPortal != null) UnityEngine.Object.Destroy(partner.TownPortal);
         partner.DestroyHud();
         if (isHost) Send("left", partner.Id.ToString());
-        if (partner.Name.Length > 0) Notify(partner.Name + reason);
+        if (partner.Name.Length > 0 && reason.Length > 0) Notify(partner.Name + reason);
     }
 
     private void EndSession(string reason)
@@ -288,6 +317,7 @@ public sealed partial class Plugin
         link = null;
         isHost = true;
         myId = worldOwner = HostId;
+        pendingWorld = joiningWorld = null;
         awayRelays.Clear();
         RestoreOwnQuests();
         ResetTravel();
