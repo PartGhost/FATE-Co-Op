@@ -9,7 +9,8 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    private const int StoryFloorSpread = 2;
+    private const int StoryFloorSpread = 2, MonsterLevelKnee = 100;
+    private const float MonsterLevelSlope = 0.5f;
     private static readonly (RealmData.RealmId Realm, string EndKey)[] RunRealms =
     {
         (RealmData.RealmId.Grove, "GROVE"), (RealmData.RealmId.Druantia, "DRUANTIA"), (RealmData.RealmId.Typhon, "TYPHON"),
@@ -35,6 +36,23 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(QuestManager), nameof(QuestManager.ReachedTown)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterRunTownReached)));
         harmony.Patch(AccessTools.Method(typeof(Quest), "GenerateObjective"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeSideQuestObjective)));
         harmony.Patch(AccessTools.Method(typeof(QuestManager), "LoadSave"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterRunQuestsLoaded)));
+        harmony.Patch(AccessTools.Method(typeof(ActiveLevel), nameof(ActiveLevel.DigGreedilyAfterDeepestDepthReached)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterDeepestDepth)));
+        harmony.Patch(AccessTools.Method(typeof(Character), nameof(Character.TweakToLevel)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeMonsterLevel)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterMonsterLevel)));
+    }
+
+    private static void BeforeMonsterLevel(Character __instance, out int __state) => __state = __instance.maxHpBase;
+
+    private static void AfterMonsterLevel(Character __instance, int __state)
+    {
+        if (!(__instance is Monster) || __instance is Pet || __instance.HasMaster() || RunFloorHere() <= MonsterLevelKnee) return;
+        __instance.maxHpBase = __state + Mathf.CeilToInt((__instance.maxHpBase - __state) * MonsterLevelSlope);
+        __instance.hp = __instance.MaxHP();
+    }
+
+    private static void AfterDeepestDepth(ref int __result)
+    {
+        var realms = SaveData.CurrentSaveData?.realmSaveData?.realms;
+        if (realms != null) __result = realms.Where(save => save.maxDepthReached > 0).Select(save => RunFloor(save.realm, save.maxDepthReached)).DefaultIfEmpty(__result).Max();
     }
 
     private static int RunLength(RealmData.RealmId realm)
@@ -142,10 +160,13 @@ public sealed partial class Plugin
         SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm = realm;
     }
 
-    private static void BeforeRunRandomizers()
+    private static void BeforeRunRandomizers(LevelGenerator __instance)
     {
         var realm = SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm;
-        if (InRun(realm)) LevelGenerator.effectiveLevelDepth += RunOffset(realm);
+        if (!InRun(realm)) return;
+        var local = __instance.GetLevelDepth();
+        var floor = RunFloor(realm, local);
+        LevelGenerator.effectiveLevelDepth += Mathf.RoundToInt(floor <= MonsterLevelKnee ? floor : MonsterLevelKnee + (floor - MonsterLevelKnee) * MonsterLevelSlope) - local;
     }
 
     private static void AfterRunItemDepth(ref int __result)

@@ -23,6 +23,8 @@ while ((State a).template -ne 'Volcano_01') {
     Wait-Pair { param($a, $b) $a.dungeonDepth -gt $depth -and !$a.transitioning -and $a.worldKey -ne '' } 'Host on the next floor' 90 | Out-Null
 }
 Wait-Pair { param($a, $b) $b.partnerElsewhere } 'Guest told the host left' 30 | Out-Null
+Send 'test-clear 25' 'b'
+Wait-Pair { param($a, $b) !$b.inCombat } 'Guest out of combat' 30 | Out-Null
 Send ('follow-partner ' + (State a).myId) 'b'
 $start = Wait-Pair { param($a, $b) $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and !$b.transitioning -and $b.fixtures -ne '' -and $a.fixtures -eq $b.fixtures } 'Guest on the same floor with the same fixtures' 90
 Send 'test-resume' 'a'

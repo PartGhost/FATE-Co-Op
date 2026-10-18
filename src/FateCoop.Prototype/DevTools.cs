@@ -24,6 +24,7 @@ public sealed partial class Plugin
     private static readonly AccessTools.FieldRef<LevelGenerator, int> TemplateIndexRef = AccessTools.FieldRefAccess<LevelGenerator, int>("activeTemplateIndex");
     private static readonly AccessTools.FieldRef<PromptUI, TextMeshProUGUI> PromptBodyRef = AccessTools.FieldRefAccess<PromptUI, TextMeshProUGUI>("bodyText");
     private static readonly System.Reflection.MethodInfo ItemDepthGetter = AccessTools.PropertyGetter(typeof(LevelGenerator), "GetAdjustedItemDepth");
+    private static readonly AccessTools.FieldRef<Character, bool> InvincibleRef = AccessTools.FieldRefAccess<Character, bool>("invincible");
     private static TemplateData? forcedTemplate;
     private static TemplateData[]? allTemplates;
 
@@ -50,6 +51,7 @@ public sealed partial class Plugin
     }
     private Coroutine? testWalk;
     private float nextPoll, nextSnapshot;
+    private bool testInvincible;
     private Monster? aggroMonster;
 
     private IEnumerator HoldMove(Vector2 input, float seconds)
@@ -71,6 +73,11 @@ public sealed partial class Plugin
 
     private void UpdateDevTools()
     {
+        if (testInvincible && Player.PlayerChar != null && Player.PlayerChar.Alive() && !downed)
+        {
+            Player.PlayerChar.SetInvincible();
+            Player.PlayerChar.hp = Player.PlayerChar.MaxHP();
+        }
         if (Time.unscaledTime >= nextPoll)
         {
             nextPoll = Time.unscaledTime + 0.2f;
@@ -276,9 +283,15 @@ public sealed partial class Plugin
                     AccessTools.Method(typeof(TutorialPopupUI), "OnConfirmButtonClicked").Invoke(tutorial, null);
                 Fate.SetPause(false);
                 break;
+            case "test-clear":
+                var clearer = Player.PlayerChar;
+                var radius = float.Parse(parts[1], CultureInfo.InvariantCulture);
+                foreach (var foe in Object.FindObjectsOfType<Monster>().Where(foe => foe.Alive() && !foe.HasMaster() && !IsStandIn(foe) && (foe.transform.position - clearer.transform.position).sqrMagnitude < radius * radius)) foe.MyVitals.Die();
+                break;
             case "test-invincible":
                 if (Player.PlayerChar == null) throw new InvalidOperationException("No primary character.");
-                Player.PlayerChar.SetInvincible(parts.Length == 2 && parts[1] == "on");
+                testInvincible = parts.Length == 2 && parts[1] == "on";
+                Player.PlayerChar.SetInvincible(testInvincible);
                 break;
             case "enter-dungeon":
                 if (SceneLoad.CurrentScene != Tableflip.Scene.Town_Grove || Player.PlayerChar == null)
@@ -307,6 +320,16 @@ public sealed partial class Plugin
                 var near = (parts.Length > 1 && partners.TryGetValue(int.Parse(parts[1], CultureInfo.InvariantCulture), out var chosen) ? chosen : FirstPartner)?.Actor;
                 if (Player.PlayerChar == null || near == null) throw new InvalidOperationException("No partner replica to walk to.");
                 Player.PlayerChar.GetComponent<NavMeshAgent>().Warp(near.transform.position + near.transform.right * 1.5f);
+                break;
+            case "test-xp-levels":
+                SetStatus("XP levels: " + string.Join(", ", parts.Skip(1).Select(xp => xp + "=" + Fate.GetLevelFromExperience(ulong.Parse(xp, CultureInfo.InvariantCulture)))));
+                break;
+            case "test-endgame":
+                SetStatus(MeasureEndgame(int.Parse(parts[1], CultureInfo.InvariantCulture)));
+                break;
+            case "test-item-depths":
+                var gear = SingletonBehaviour<FateDB>.Instance.AllItems.Where(item => !item.reserved && item.minimumDepth > 0).ToList();
+                SetStatus($"Items {gear.Count}, deepest minimum {gear.Max(item => item.minimumDepth)}; " + string.Join(", ", new[] { 25, 50, 75, 100, 150, 200, 300 }.Select(cap => $"<={cap}: {gear.Count(item => item.minimumDepth <= cap)}")) + "; deepest: " + string.Join(", ", gear.OrderByDescending(item => item.minimumDepth).Take(6).Select(item => item.displayName + "@" + item.minimumDepth)));
                 break;
             case "test-back":
                 Player.PlayerChar.GetComponentInChildren<CharacterCustomizationDefaults>(true).SetBack(parts[1]);
@@ -708,6 +731,71 @@ public sealed partial class Plugin
         finally { quietScene = NoScene; }
     }
 
+    private static readonly Tableflip.Attribute[] FighterStats = { Tableflip.Attribute.Strength, Tableflip.Attribute.Vitality, Tableflip.Attribute.Strength, Tableflip.Attribute.Vitality, Tableflip.Attribute.Dexterity };
+    private static readonly Tableflip.Attribute[] FighterSkills = { Tableflip.Attribute.SkillSword, Tableflip.Attribute.SkillShield };
+    private const int MeasureHealth = 1000000;
+    private static readonly ItemType[] FighterArmor = { ItemType.Helmet, ItemType.Shirt, ItemType.Gloves, ItemType.Boots, ItemType.Shield, ItemType.Belt };
+
+    private string MeasureEndgame(int level)
+    {
+        var hero = Player.PlayerChar;
+        while (hero.Level < level) hero.AwardExperience((int)Math.Min(int.MaxValue / 2, Fate.GetExperienceNeeded(level) - hero.experience + 1), fromMaster: false);
+        for (var i = 0; hero.UnusedStatPoint > 0; i++) hero.SpendPoint(FighterStats[i % FighterStats.Length]);
+        for (var i = 0; hero.UnusedSkillPoints > 0; i++) hero.SpendPoint(FighterSkills[i % FighterSkills.Length]);
+        foreach (var worn in hero.inventory.Where(item => item != null && item.equipped).ToList()) hero.RemoveItemFromInventory(worn, RemoveItemReason.Drop);
+        var depth = (int)ItemDepthGetter.Invoke(LevelGenerator.currentInstance, null);
+        var dropped = SingletonBehaviour<FateDB>.Instance.AllItems.Where(item => !item.reserved && item.minimumDepth <= depth).ToList();
+        string wear(ItemType type, Func<ItemData, float> power)
+        {
+            foreach (var data in dropped.Where(item => item.itemType == type).OrderByDescending(power))
+            {
+                var item = new Item(data);
+                if (!hero.AddItemToInventory(item, AddItemReason.Loot)) return "";
+                if (hero.AttemptAutoEquip(item)) return data.displayName;
+                hero.RemoveItemFromInventory(item, RemoveItemReason.Drop);
+            }
+            return "";
+        }
+        var gear = new[] { wear(ItemType.Sword, data => data.damageRange.Max) }.Concat(FighterArmor.Select(type => wear(type, data => data.armorRange.Max))).Where(name => name.Length > 0).ToList();
+        var foes = Object.FindObjectsOfType<Monster>().Where(foe => foe.Alive() && !IsStandIn(foe) && !foe.HasMaster()).OrderBy(foe => (foe.transform.position - hero.transform.position).sqrMagnitude).Take(8).ToList();
+        hero.SetInvincible(false);
+        var dealt = new List<float>();
+        var taken = new List<float>();
+        var heroBase = hero.maxHpBase;
+        hero.maxHpBase = MeasureHealth;
+        foreach (var foe in foes)
+        {
+            var foeBase = foe.maxHpBase;
+            var foeHp = foe.hp;
+            foe.maxHpBase = MeasureHealth;
+            for (var swing = 0; swing < 8; swing++)
+            {
+                foe.hp = foe.MaxHP();
+                hero.SelectAttack();
+                RollAttackMethod.Invoke(hero, new object[] { foe });
+                hero.attackTimer = 0f;
+                CurrentAttackField.SetValue(hero, null);
+                dealt.Add(foe.MaxHP() - foe.hp);
+                hero.hp = hero.MaxHP();
+                foe.SelectAttack();
+                RollAttackMethod.Invoke(foe, new object[] { hero });
+                foe.attackTimer = 0f;
+                CurrentAttackField.SetValue(foe, null);
+                taken.Add(hero.MaxHP() - hero.hp);
+            }
+            foe.maxHpBase = foeBase;
+            foe.hp = foeHp;
+        }
+        hero.maxHpBase = heroBase;
+        hero.hp = hero.MaxHP();
+        hero.SetInvincible(true);
+        float median(IEnumerable<float> values) { var sorted = values.OrderBy(v => v).ToList(); return sorted.Count == 0 ? 0f : sorted[sorted.Count / 2]; }
+        var foeHealth = median(foes.Select(foe => (float)foe.MaxHP()));
+        var hit = dealt.DefaultIfEmpty(0f).Average();
+        var hurt = taken.DefaultIfEmpty(0f).Average();
+        return $"Endgame floor {RunFloorHere()} itemDepth {depth} | hero L{hero.Level} hp {hero.MaxHP()} str {hero.attributes.Strength} | gear {string.Join("/", gear)} | foes {foes.Count} L{median(foes.Select(foe => (float)foe.Level))} hp {foeHealth} xp {median(foes.Select(foe => (float)foe.experienceReward))} on floor {Object.FindObjectsOfType<Monster>().Count(foe => foe.Alive() && !foe.HasMaster() && !IsStandIn(foe))} | hero hit {hit:0} -> {foeHealth / Math.Max(hit, 0.01f):0.0} swings to kill | foe hit {hurt:0} -> {hero.MaxHP() / Math.Max(hurt, 0.01f):0.0} hits to die";
+    }
+
     private static int QuestDepth(Quest quest) => QuestMonsters(quest).Select(target => target.targetDepth).Append(quest.questItem?.targetDepth ?? 0).Max();
 
     private static string PathOf(Transform node) => node.parent == null ? node.name : PathOf(node.parent) + "/" + node.name;
@@ -751,7 +839,7 @@ public sealed partial class Plugin
             dungeonRealm = SingletonBehaviour<PlayerStatus>.InstanceExists() ? SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm.ToString() : "",
             effectiveDepth = LevelGenerator.effectiveLevelDepth,
             runSections = string.Join(",", RunSections.Select(section => section.realm + ":" + section.offset)), dlcs = ownedDlcs,
-            netStats = string.Join("\n", NetStatLines()), capeBend = player != null && player.GetComponentInChildren<CapeSwing>() is CapeSwing swing ? swing.Bend : -1f, dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
+            netStats = string.Join("\n", NetStatLines()), primaryLevel = player != null ? player.Level : 0, invincible = player != null && InvincibleRef(player), capeBend = player != null && player.GetComponentInChildren<CapeSwing>() is CapeSwing swing ? swing.Bend : -1f, dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
             mirroringQuests = MirroringQuests, sharedQuestsReceived = sharedQuestsJson.Length > 0,
             giverQuests = string.Join(", ", Object.FindObjectsOfType<QuestGiver>().Where(giver => giver.Quest != null && giver.Quest.Status != Quest.QuestStatus.None).Select(giver => giver.CharacterName + ":" + giver.Quest.Status)),
             prompt = PromptUI.IsPromptActive ? PromptBodyRef(SingletonBehaviour<PromptUI>.Instance).text : "",
@@ -805,7 +893,7 @@ public sealed partial class Plugin
         public string scene = "", status = "", campaign = "", gameScene = "", layoutHash = "", worldKey = "", sessionRole = "", lastChat = "", remotePetModel = "", remoteName = "", aggro = "", partyQuests = "", remoteEffects = "";
         public int primaryId, guestId, spawnedTotal, aiCallsSuppressed, prototypeActors, worldEpoch, dungeonDepth, networkAccepted, networkRejected, localPort, myId, worldOwner, partnerCount, partnersInWorld, chatReceived;
         public Vector3 primaryPosition, guestPosition, remotePetPosition;
-        public bool guestOnNavMesh, guestWalking, guestRunning, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, ownsWorld, followPrompt, inCombat, partnerElsewhere, downed, replicaDown, fateChoice;
+        public bool guestOnNavMesh, guestWalking, guestRunning, saveLoaded, steamInitialized, transitioning, networkConnected, worldReady, paused, primaryAlive, primaryOnNavMesh, ownsWorld, followPrompt, inCombat, partnerElsewhere, downed, replicaDown, fateChoice, invincible;
         public int remotePetActors, localPetCount, partnerTownPortals, partnerPortals, partnerPlates, rangedRolls, rangedMisses, grazes;
         public bool rangedEquipped;
         public string dungeonRealm = "", monsterLevels = "", prompt = "", runSections = "";
@@ -813,6 +901,7 @@ public sealed partial class Plugin
         public float dayPhase, sunIntensity, capeBend;
         public bool mirroringQuests, sharedQuestsReceived;
         public string giverQuests = "", netStats = "";
+        public int primaryLevel;
         public string townNpcs = "", mainHand = "", localPet = "", fixtures = "", template = "", vitals = "", bagCheck = "", partnerIcon = "", partnerPetPortrait = "", buffs = "";
         public int replicaImpacts, skillPoints;
         public int statPoints, dungeonFloors, friendImpacts, localSummons, partnerSummons, mapOpenCells, bagFreeCells;

@@ -61,6 +61,9 @@ foreach ($realm in $realms) {
     Send 'test-stairs down'
     $next = Wait-Until { param($a, $b) (Settled $a) -and $a.dungeonDepth -eq $offsets[$realm] + 1 } "First floor of $realm"
     if ($next.a.dungeonRealm -ne $realm -or $next.a.localDepth -ne 1) { throw ("The stairs into $realm went to " + $next.a.dungeonRealm + ' ' + $next.a.localDepth) }
+    $floor = $offsets[$realm] + 1
+    $levelPart = $next.a.effectiveDepth - $(if ($floor -le 100) { $floor } else { [Math]::Round(100 + ($floor - 100) * 0.5) })
+    if ($levelPart -lt 0 -or $levelPart -gt [Math]::Floor($next.a.primaryLevel / 3)) { throw ("Monster depth on floor $floor is " + $next.a.effectiveDepth + " for a level " + $next.a.primaryLevel + ' player') }
     Write-Output ("The stairs down from floor " + $offsets[$realm] + " lead into $realm 1.")
 }
 

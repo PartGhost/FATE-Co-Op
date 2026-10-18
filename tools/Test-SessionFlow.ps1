@@ -56,6 +56,7 @@ Send 'follow-partner' 'a'
 Wait-Pair { param($a, $b) (SameFloor $a $b) -and $a.dungeonDepth -eq $stairs.b.dungeonDepth -and !$a.followPrompt } 'Host following the guest down' | Out-Null
 Write-Output 'Host said yes and both met on the guest''s depth.'
 
+Send 'test-clear 25' 'b'
 Send-Until 'town' 'b' { param($a, $b) $b.gameScene -eq 'Town_Grove' } 'Guest walking to town'
 Wait-Pair { param($a, $b) $b.gameScene -eq 'Town_Grove' -and !$b.transitioning -and $a.followPrompt -and $b.partnerElsewhere } 'Guest in town, host asked to follow' | Out-Null
 Start-Sleep -Seconds 8

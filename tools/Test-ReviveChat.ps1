@@ -30,6 +30,7 @@ Write-Output 'Chat went both ways.'
 Send 'test-down' 'b'
 Wait-Pair { param($a, $b) $b.downed -and $b.primaryHp -le 0 -and !$b.fateChoice -and $a.replicaDown -and $b.worldKey -eq $a.worldKey } 'Guest going down' | Out-Null
 Write-Output 'Guest went down instead of dying; the host sees them lying on the floor.'
+Send 'test-clear 25'
 Send 'test-near-partner'
 $reviving = Wait-Pair { param($a, $b) $a.reviveProgress -gt 0.4 -and $b.downed } 'Host reviving' 10
 Start-Sleep -Milliseconds 1500

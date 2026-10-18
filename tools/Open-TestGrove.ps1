@@ -20,7 +20,9 @@ if ($s.primaryId -eq 0) {
     Send 'continue'
 }
 $s = Wait-State { param($state) $state.primaryId -ne 0 -and !$state.transitioning }
-if ($s.gameScene -eq 'Dungeon') { Send 'town' }
+if ($s.fateChoice) { Send 'test-fate-town' }
+elseif ($s.gameScene -eq 'Dungeon') { Send 'town' }
 $s = Wait-State { param($state) $state.gameScene -eq 'Town_Grove' -and !$state.transitioning -and $state.primaryOnNavMesh }
 Send 'test-resume'
+Send 'test-vitals 100'
 Write-Output ('Instance ' + $Instance + ' ready in Grove; primary ' + $s.primaryId)

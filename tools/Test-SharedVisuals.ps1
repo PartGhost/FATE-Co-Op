@@ -16,7 +16,9 @@ function Wait-Pair([scriptblock]$Condition, [string]$What, [int]$Seconds = 20) {
 }
 
 & (Join-Path $PSScriptRoot 'Enter-HostDungeon.ps1') | Out-Null
-$start = Wait-Pair { param($a, $b) $a.gameScene -eq 'Dungeon' -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $a.guestId -ne 0 -and $b.guestId -ne 0 -and $b.monstersTracked -gt 0 } 'Shared floor' 90
+Send 'test-invincible on' 'a'
+Send 'test-invincible on' 'b'
+$start =Wait-Pair { param($a, $b) $a.gameScene -eq 'Dungeon' -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $a.guestId -ne 0 -and $b.guestId -ne 0 -and $b.monstersTracked -gt 0 } 'Shared floor' 90
 do {
     Send 'test-resume' 'a'
     Send 'next-floor'
