@@ -22,6 +22,7 @@ Online co-op for **FATE: Reawakened** (Original FATE, Grove) for 2 to 16 players
 - The dungeon keeps going: below the Grove's last floor the stairs lead on into Druantia, Typhon and the Temple of Fate from FATE: Undiscovered Realms, then The Traitor Soul's Chamber of Trials, The Cursed King's Caverns of Living Fire, Tkala Crypt and Haunted Palace, and finally Prometheus if everyone in your game owns that DLC, with monsters and loot that keep getting stronger. Grove stays your town, and once you reach a realm its story giver (Twigger, Cyrus, Sullivan for the Temple, Malkondra for the trials, Xerxes, Awadji, Sakina and Kurosh for The Cursed King) comes to Grove with its quests. Xerxes, Sakina and Sullivan keep their resets too: say No to a story and they offer the reset. The quest log's arrows page between the realms' stories. More of the expansions are coming.
 - Sagestones, a new magenta gem, give 2 to 10% more experience when socketed.
 - Day and night in Grove: a full day takes 20 minutes, dusk turns the town golden, and at night the lamps light the streets. In co-op everyone sees the host's time of day.
+- Capes, cloaks, mantles and drapes move: they bend and trail behind you as you run and turn, on you and your friends.
 - Text chat with speech bubbles.
 - WASD movement and a middle-mouse camera.
 - Monsters get tougher for each extra player on the floor, and they go after whoever is doing the most damage.

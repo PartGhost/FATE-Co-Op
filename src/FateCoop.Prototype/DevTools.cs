@@ -308,6 +308,12 @@ public sealed partial class Plugin
                 if (Player.PlayerChar == null || near == null) throw new InvalidOperationException("No partner replica to walk to.");
                 Player.PlayerChar.GetComponent<NavMeshAgent>().Warp(near.transform.position + near.transform.right * 1.5f);
                 break;
+            case "test-back":
+                Player.PlayerChar.GetComponentInChildren<CharacterCustomizationDefaults>(true).SetBack(parts[1]);
+                break;
+            case "test-zoom":
+                AccessTools.Field(typeof(Cleverous.Prodigy.ProdigyCamera), "targetZoomAmount").SetValue(Cleverous.Prodigy.ProdigyCamera.Instance, new Vector3(0f, 0f, -float.Parse(parts[1], CultureInfo.InvariantCulture)));
+                break;
             case "test-npc":
                 var talker = Object.FindObjectsOfType<NpcVoiceLines>().First(voice => voice.thisNpc.ToString() == parts[1]);
                 Player.PlayerChar.GetComponent<NavMeshAgent>().Warp(talker.transform.position + talker.transform.forward * 2f);
@@ -745,7 +751,7 @@ public sealed partial class Plugin
             dungeonRealm = SingletonBehaviour<PlayerStatus>.InstanceExists() ? SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm.ToString() : "",
             effectiveDepth = LevelGenerator.effectiveLevelDepth,
             runSections = string.Join(",", RunSections.Select(section => section.realm + ":" + section.offset)), dlcs = ownedDlcs,
-            netStats = string.Join("\n", NetStatLines()), dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
+            netStats = string.Join("\n", NetStatLines()), capeBend = player != null && player.GetComponentInChildren<CapeSwing>() is CapeSwing swing ? swing.Bend : -1f, dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
             mirroringQuests = MirroringQuests, sharedQuestsReceived = sharedQuestsJson.Length > 0,
             giverQuests = string.Join(", ", Object.FindObjectsOfType<QuestGiver>().Where(giver => giver.Quest != null && giver.Quest.Status != Quest.QuestStatus.None).Select(giver => giver.CharacterName + ":" + giver.Quest.Status)),
             prompt = PromptUI.IsPromptActive ? PromptBodyRef(SingletonBehaviour<PromptUI>.Instance).text : "",
@@ -804,7 +810,7 @@ public sealed partial class Plugin
         public bool rangedEquipped;
         public string dungeonRealm = "", monsterLevels = "", prompt = "", runSections = "";
         public int localDepth, effectiveDepth, itemDepth, dlcs;
-        public float dayPhase, sunIntensity;
+        public float dayPhase, sunIntensity, capeBend;
         public bool mirroringQuests, sharedQuestsReceived;
         public string giverQuests = "", netStats = "";
         public string townNpcs = "", mainHand = "", localPet = "", fixtures = "", template = "", vitals = "", bagCheck = "", partnerIcon = "", partnerPetPortrait = "", buffs = "";

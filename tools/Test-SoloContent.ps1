@@ -41,3 +41,12 @@ Send 'test-levelup'
 $after = Wait-Until { param($s) $s.primaryExperience -gt $before.primaryExperience } 'Experience award'
 if ($after.primaryExperience - $before.primaryExperience -ne 52000) { throw ('A Sagestone should turn 50000 experience into 52000, got ' + ($after.primaryExperience - $before.primaryExperience)) }
 Write-Output 'A socketed Sagestone gives 4% more experience (50000 -> 52000).'
+
+Send 'test-back Item_LightQuiver'
+Start-Sleep 1
+if ((State).capeBend -ge 0) { throw 'A quiver got cape physics.' }
+Send 'test-back Item_BloodmoonCloak'
+Start-Sleep 1
+Send 'test-walk 1 0'
+$swung = Wait-Until { param($s) $s.capeBend -gt 10 } 'A cape bending while walking'
+Write-Output ('A cape bends while walking (' + [Math]::Round($swung.capeBend) + ' degrees) and a quiver stays rigid.')

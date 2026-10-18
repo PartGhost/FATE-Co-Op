@@ -71,6 +71,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallExperienceGemHooks();
             InstallBagSortHooks();
             InstallRunHooks();
+            InstallCapeHooks();
             if (testTools) InstallDevHooks();
             commandLineLobby = LobbyFromArguments(Environment.GetCommandLineArgs());
             SetStatus("Ready.");
