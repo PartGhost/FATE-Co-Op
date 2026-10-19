@@ -270,21 +270,27 @@ public sealed partial class Plugin
     private static void AfterDistanceToPlayer(Character __instance, ref float __result)
     {
         var plugin = Active;
-        if (plugin == null || !plugin.OwnsWorld) return;
-        foreach (var partner in plugin.WorldPartners())
-            if (partner.Actor != null) __result = Math.Min(__result, (partner.Actor.transform.position - __instance.transform.position).sqrMagnitude);
+        if (plugin == null || !plugin.OwnsWorld || plugin.partners.Count == 0) return;
+        var key = plugin.LocalFrameWorld();
+        foreach (var partner in plugin.partners.Values)
+            if (partner.Actor != null && partner.InWorld(key)) __result = Math.Min(__result, (partner.Actor.transform.position - __instance.transform.position).sqrMagnitude);
     }
 
     private static void AfterFindCharacter(LevelGenerator __instance, Transform transformation, Alignment alignment, float motionRadius, float coneRadius, float radius, ref Character __result)
     {
         var plugin = Active;
-        if (__result != null || plugin == null || !plugin.OwnsWorld) return;
+        if (__result != null || plugin == null || !plugin.OwnsWorld || plugin.partners.Count == 0) return;
         var mask = ~((1 << LayerMask.NameToLayer("Player")) | (1 << LayerMask.NameToLayer("Player Damagable")));
-        foreach (var partner in plugin.WorldPartners().Where(p => p.Actor != null).OrderBy(p => (p.Actor!.transform.position - transformation.position).sqrMagnitude))
+        var key = plugin.LocalFrameWorld();
+        var nearest = float.MaxValue;
+        foreach (var partner in plugin.partners.Values)
         {
-            if (!partner.Actor!.Alive() || !LineOfSight(__instance, partner.Actor, alignment, transformation, motionRadius, coneRadius, radius, mask)) continue;
-            __result = partner.Actor;
-            return;
+            var actor = partner.Actor;
+            if (actor == null || !partner.InWorld(key) || !actor.Alive()) continue;
+            var distance = (actor.transform.position - transformation.position).sqrMagnitude;
+            if (distance >= nearest || !LineOfSight(__instance, actor, alignment, transformation, motionRadius, coneRadius, radius, mask)) continue;
+            __result = actor;
+            nearest = distance;
         }
     }
 
@@ -501,11 +507,13 @@ public sealed partial class Plugin
             if (!monsters.TryGetValue(entry.Key, out var monster) || monster == null || monster.MyVitals.IsDead) continue;
             var state = entry.Value;
             var previous = monster.transform.position;
+            var facing = Quaternion.Euler(0, state.Yaw, 0);
+            if ((previous - state.Position).sqrMagnitude < 0.0001f && Quaternion.Angle(monster.transform.rotation, facing) < 0.5f) continue;
             var next = Vector3.Distance(previous, state.Position) > 4f ? state.Position : Vector3.Lerp(previous, state.Position, 1f - Mathf.Exp(-15f * Time.unscaledDeltaTime));
             var agent = monster.GetComponent<NavMeshAgent>();
             if (agent != null && agent.enabled && agent.isOnNavMesh) agent.Warp(next);
             else monster.transform.position = next;
-            monster.transform.rotation = Quaternion.Slerp(monster.transform.rotation, Quaternion.Euler(0, state.Yaw, 0), 1f - Mathf.Exp(-20f * Time.unscaledDeltaTime));
+            monster.transform.rotation = Quaternion.Slerp(monster.transform.rotation, facing, 1f - Mathf.Exp(-20f * Time.unscaledDeltaTime));
         }
     }
 
@@ -520,10 +528,9 @@ public sealed partial class Plugin
     private static void AfterMonsterUpdate(Monster __instance)
     {
         var plugin = Active;
-        if (plugin == null || __instance.MyVitals.IsDead) return;
+        if (plugin == null || plugin.OwnsWorld || __instance.MyVitals.IsDead || !plugin.monsterIds.TryGetValue(__instance, out var id) || !plugin.monsterStates.TryGetValue(id, out var state)) return;
         var animator = __instance.GetComponent<Animator>();
         if (animator == null) return;
-        if (plugin.OwnsWorld || !plugin.monsterIds.TryGetValue(__instance, out var id) || !plugin.monsterStates.TryGetValue(id, out var state)) return;
         var attacking = (state.Flags & MonsterState.Attacking) != 0;
         if (attacking && plugin.attackingMirrors.Add(id))
         {

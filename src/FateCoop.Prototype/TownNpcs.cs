@@ -19,6 +19,7 @@ public sealed partial class Plugin
     private const float GroundSearch = 2f;
     private const string NpcMarker = "P_Marker_NPC";
     private static readonly string[] StartupMethods = { "Awake", "OnEnable" };
+    private const System.Reflection.BindingFlags StartupFlags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly;
     private static readonly (NpcGreetings Npc, Tableflip.Scene Home)[] BorrowedNpcs =
     {
         (NpcGreetings.Gort, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.Xander, Tableflip.Scene.Town_Ekbatan), (NpcGreetings.Omar, Tableflip.Scene.Town_Ekbatan),
@@ -63,7 +64,7 @@ public sealed partial class Plugin
         var quiet = new HarmonyMethod(typeof(Plugin), nameof(BeforeBorrowedStartup));
         foreach (var startup in new[] { typeof(Player).Assembly, typeof(SingletonBehaviour<>).Assembly }.SelectMany(AccessTools.GetTypesFromAssembly)
             .Where(type => typeof(MonoBehaviour).IsAssignableFrom(type) && !type.ContainsGenericParameters)
-            .SelectMany(type => StartupMethods.Select(name => AccessTools.DeclaredMethod(type, name, Type.EmptyTypes)))
+            .SelectMany(type => StartupMethods.Select(name => type.GetMethod(name, StartupFlags, null, Type.EmptyTypes, null)))
             .Where(method => method != null && !method.IsAbstract)) harmony!.Patch(startup, prefix: quiet);
         harmony!.Patch(AccessTools.Method(typeof(QuestInteractable), nameof(QuestInteractable.Interact)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeGroveNpcTalk)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterGroveNpcTalk)));
     }
@@ -80,6 +81,9 @@ public sealed partial class Plugin
     private IEnumerator BorrowNpcs(List<Tableflip.Scene> homes)
     {
         furnishing = true;
+        var loading = SingletonBehaviour<LoadingScreenUI>.Instance;
+        var borrowed = 0;
+        loading.ShowLoading(false, () => (float)borrowed / homes.Count);
         try
         {
             foreach (var home in homes)
@@ -89,6 +93,7 @@ public sealed partial class Plugin
                 quietScene = (int)home;
                 yield return SceneManager.LoadSceneAsync((int)home, LoadSceneMode.Additive);
                 yield return SceneManager.UnloadSceneAsync((int)home);
+                borrowed++;
             }
         }
         finally
@@ -98,7 +103,11 @@ public sealed partial class Plugin
             var travel = travelAfterBorrowing;
             travelAfterBorrowing = null;
             if (travel != null) travel();
-            else if (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove) PlaceTownNpcs();
+            else
+            {
+                if (SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove) PlaceTownNpcs();
+                loading.HideLoading(true);
+            }
         }
     }
 
@@ -164,6 +173,7 @@ public sealed partial class Plugin
     {
         var grove = SceneManager.GetActiveScene().GetRootGameObjects();
         var merchants = grove.SelectMany(root => root.GetComponentsInChildren<Merchant>(true)).ToList();
+        var icon = merchants.Where(merchant => merchant.gameObject.activeInHierarchy).Select(merchant => merchant.GetComponentInChildren<MiniMapIconUI>(true)).First(found => found != null).transform;
         foreach (var template in npcTemplates)
         {
             if (template.Value.TryGetComponent<Merchant>(out var borrowed))
@@ -184,7 +194,6 @@ public sealed partial class Plugin
             NavMesh.SamplePosition(spot.Spot, out var ground, GroundSearch, NavMesh.AllAreas);
             var resident = Object.Instantiate(template.Value, ground.position, Quaternion.Euler(0f, spot.Yaw, 0f), merchants[0].transform.parent);
             if (resident.TryGetComponent<RealmQuestGiver>(out var residentStories)) residentStories.realmQuests = stories;
-            var icon = merchants[0].GetComponentInChildren<MiniMapIconUI>(true).transform;
             var copy = Object.Instantiate(icon.gameObject, resident.transform).transform;
             copy.localPosition = icon.localPosition;
             copy.localScale = IconScaleBeforeAwake(icon);

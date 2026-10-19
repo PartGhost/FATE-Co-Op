@@ -24,7 +24,7 @@ public sealed partial class Plugin
 
     private void UpdateNameplates()
     {
-        if (hudOwner == null) return;
+        if (hudOwner == null || partners.Count == 0) return;
         var shown = showPanel && !MenuOpen();
         foreach (var partner in partners.Values)
         {

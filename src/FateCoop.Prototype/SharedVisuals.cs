@@ -13,7 +13,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    private static readonly FieldInfo EffectsField = AccessTools.Field(typeof(Character), "effects");
+    private static readonly Dictionary<string, bool> SharedEffectNames = new Dictionary<string, bool>();
     private static readonly MethodInfo AddParticlesMethod = AccessTools.Method(typeof(Character), "AddPSEffect");
     private static readonly MethodInfo RemoveParticlesMethod = AccessTools.Method(typeof(Character), "RemovePSEffect");
     private static readonly MethodInfo CastingVfxMethod = AccessTools.Method(typeof(Character), "CastingVFX");
@@ -101,11 +101,16 @@ public sealed partial class Plugin
 
     private static string ActiveEffectNames(Character character)
     {
-        var effects = (Dictionary<ActivationType, List<AppliedEffect>>?)EffectsField.GetValue(character);
-        if (effects == null) return "";
-        var database = SingletonBehaviour<FateDB>.Instance;
-        return string.Join(",", effects.Values.Where(list => list != null).SelectMany(list => list).Select(effect => effect.Name)
-            .Where(name => name.Length > 0 && name.IndexOfAny(new[] { ',', '|', ';' }) < 0 && database.GetParticlePrefab(name) != null).Distinct().OrderBy(name => name, StringComparer.Ordinal));
+        var effects = EffectsRef(character);
+        if (effects == null || effects.Values.All(list => list == null || list.Count == 0)) return "";
+        return string.Join(",", effects.Values.Where(list => list != null).SelectMany(list => list).Select(effect => effect.Name).Where(Shareable).Distinct().OrderBy(name => name, StringComparer.Ordinal));
+    }
+
+    private static bool Shareable(string name)
+    {
+        if (!SharedEffectNames.TryGetValue(name, out var shared))
+            SharedEffectNames[name] = shared = name.Length > 0 && name.IndexOfAny(new[] { ',', '|', ';' }) < 0 && SingletonBehaviour<FateDB>.Instance.GetParticlePrefab(name) != null;
+        return shared;
     }
 
     private void ShowEffects(Character target, string names)

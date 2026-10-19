@@ -22,7 +22,7 @@ function Send([string]$Command, [string]$Instance = 'a') { & (Join-Path $PSScrip
 function Wait-Follow {
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while (!(Read-State 'b').followPrompt) {
-        if ([DateTime]::UtcNow -gt $deadline) { throw 'Guest never got the follow prompt.' }
+        if ([DateTime]::UtcNow -gt $deadline) { throw ('Guest never got the follow prompt: ' + ((Read-State 'b') | Select-Object dungeonDepth, inCombat, strikesTaken, partnerElsewhere, prompt, inputState, status | ConvertTo-Json -Compress)) }
         Start-Sleep -Milliseconds 400
     }
     Send 'follow-partner' 'b'
@@ -57,10 +57,12 @@ $settled = Wait-Pair 1
 function Distance($u,$v) { [Math]::Sqrt([Math]::Pow($u.x-$v.x,2)+[Math]::Pow($u.z-$v.z,2)) }
 if ((Distance $settled.a.guestPosition $settled.b.primaryPosition) -gt .25 -or (Distance $settled.b.guestPosition $settled.a.primaryPosition) -gt .25) { throw 'Replicas did not converge after movement.' }
 Write-Output 'Independent movement and converged replicas passed on floor 1.'
+Send 'test-clear 1000'
 Send 'next-floor'
 Wait-Follow
 $floor2 = Wait-Pair 2
 Write-Output 'Floor 2: joining instance followed the host and matched the layout.'
+Send 'test-clear 1000'
 Send 'next-floor'
 Wait-Follow
 $floor3 = Wait-Pair 3

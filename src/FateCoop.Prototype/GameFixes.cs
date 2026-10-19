@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Reflection.Emit;
 using System.Linq;
 using HarmonyLib;
 using Tableflip;
@@ -13,6 +15,8 @@ public sealed partial class Plugin
     private static readonly AccessTools.FieldRef<FateChoice, uint> FateFameCostRef = AccessTools.FieldRefAccess<FateChoice, uint>("fameCost");
     private static readonly AccessTools.FieldRef<StatButton, Character> StatButtonCharacterRef = AccessTools.FieldRefAccess<StatButton, Character>("character");
     private static readonly System.Reflection.MethodInfo StatButtonEffectHandler = AccessTools.Method(typeof(StatButton), "OnAppliedEffect");
+    private static readonly System.Reflection.MethodInfo TownGetter = AccessTools.PropertyGetter(typeof(SingletonBehaviour<Town>), nameof(SingletonBehaviour<Town>.Instance));
+    private static readonly AccessTools.FieldRef<ItemUI, List<ItemSlotUI>> CollidingSlotsRef = AccessTools.FieldRefAccess<ItemUI, List<ItemSlotUI>>("currentCollidingSlots");
     private static bool fateTransport;
 
     private void InstallGameFixHooks()
@@ -27,6 +31,44 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(LevelGenerator), "ReplaceDungeon"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeFateReplace)) { priority = Priority.First });
         harmony.Patch(AccessTools.Method(typeof(FateChoice), "OnThirdChoice"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeFateTown)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterFateTown)));
         harmony.Patch(AccessTools.Method(typeof(StatButton), nameof(StatButton.Setup)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeStatButtonSetup)));
+        harmony.Patch(AccessTools.Method(typeof(QuestManager), nameof(QuestManager.AcceptQuest)), transpiler: new HarmonyMethod(typeof(Plugin), nameof(TownCheckWithoutCreating)));
+        harmony.Patch(AccessTools.Method(typeof(ItemUI), nameof(ItemUI.OnEndDrag)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeGemDragEnd)));
+        harmony.Patch(AccessTools.Method(typeof(PortalManager), "OnAvatarSpawn"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePortalRespawn)));
+    }
+
+    private static void BeforePortalRespawn(PortalManager __instance)
+    {
+        if (!SingletonBehaviour<Town>.InstanceExists()) __instance.RemoveCurrentActivePortal();
+    }
+
+    private static IEnumerable<CodeInstruction> TownCheckWithoutCreating(IEnumerable<CodeInstruction> instructions) =>
+        instructions.Select(instruction => instruction.Calls(TownGetter) ? new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(Plugin), nameof(ExistingTown))).MoveLabelsFrom(instruction) : instruction);
+
+    private static Town? ExistingTown() => SingletonBehaviour<Town>.InstanceExists() ? SingletonBehaviour<Town>.Instance : null;
+
+    private static bool BeforeGemDragEnd(ItemUI __instance)
+    {
+        var gem = __instance.currentItem;
+        if (InventoryUI.draggedItemUI != __instance || gem == null || gem.itemType != ItemType.Gem || __instance.Owner is Merchant) return true;
+        var slot = CollidingSlotsRef(__instance)?.OfType<EquipmentSlotUI>().FirstOrDefault();
+        if (slot == null) return true;
+        InventoryUI.draggedItemUI = null;
+        __instance.canvasGroup.alpha = 1f;
+        __instance.canvasGroup.blocksRaycasts = true;
+        var target = slot.IsOpen ? null : slot.GetCurrentItemUI;
+        if (target == null || target.currentItem.sockets <= (target.currentItem.sockedtedItems?.Count ?? 0))
+        {
+            __instance.ReturnToOriginalSpot();
+            return false;
+        }
+        target.currentItem.SocketItem(gem);
+        target.UpdateSockets();
+        if (__instance.Owner == null) SimpleSingletonBehaviour<PlayerUI>.Instance.InventoryUI.RemoveItemFromStash(gem);
+        else __instance.Owner.RemoveItemFromInventory(gem, RemoveItemReason.Consumed);
+        __instance.ForceClearCurrentSlots();
+        __instance.gameObject.SetActive(false);
+        gem.PlayLandSound();
+        return false;
     }
 
     private static void AfterItemMade(Item __instance) =>

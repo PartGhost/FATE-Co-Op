@@ -42,7 +42,18 @@ Send 'test-finish-quest' 'b'
 Wait-Pair { param($a, $b) $a.partyQuests -eq '' -and $b.partyQuests -eq '' } 'Guest turning in its own quest' | Out-Null
 Write-Output ('Guest accepted, completed and turned in a quest; the host saw each step (' + $guestAccept.a.giverQuests + ', then ' + $guestDone.a.giverQuests + ').')
 
-$groveEnd = [int](((State a).runSections -split ',')[1] -split ':')[1]
+Send 'enter-dungeon'
+Wait-Pair { param($a, $b) $a.gameScene -eq 'Dungeon' -and !$a.transitioning -and $a.primaryOnNavMesh } 'Host on the first floor' 90 | Out-Null
+Send 'test-accept-quest 2' 'b'
+Wait-Pair { param($a, $b) $a.partyQuests -ne '' -and $b.partyQuests -eq $a.partyQuests } 'Host taking a guest''s quest from the dungeon' | Out-Null
+Send 'test-portal'
+Start-Sleep -Seconds 2
+if ((State a).status -like 'Command failed*') { throw ('Host could not open a portal after a guest accepted a quest: ' + (State a).status) }
+Send 'next-floor'
+Wait-Pair { param($a, $b) $a.dungeonDepth -eq 2 -and !$a.transitioning -and $a.primaryOnNavMesh -and !$a.loadingShown } 'Host taking the next floor after a guest accepted a quest' 90 | Out-Null
+Write-Output 'Guest accepted a quest while the host was in the dungeon: the host could still open a portal and take the next floor.'
+
+$groveEnd =[int](((State a).runSections -split ',')[1] -split ':')[1]
 Send 'test-quest-depth 60'
 Start-Sleep -Seconds 2
 if ((State a).status -notmatch 'new ([\d,]+), loaded (\d+)') { throw ('No quest depth report: ' + (State a).status) }

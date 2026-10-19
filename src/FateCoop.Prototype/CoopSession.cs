@@ -11,7 +11,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.27.0";
+    internal const string Version = "0.28.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     internal const int HostId = 0;
     private const int Everyone = -1, Unassigned = -2;

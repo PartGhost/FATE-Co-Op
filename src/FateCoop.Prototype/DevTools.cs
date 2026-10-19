@@ -67,6 +67,25 @@ public sealed partial class Plugin
         testTurn = 0f;
     }
 
+    private IEnumerator MeasureFrames(float seconds)
+    {
+        var frames = new List<float>();
+        var collections = System.GC.CollectionCount(0);
+        var heap = UnityEngine.Profiling.Profiler.GetMonoUsedSizeLong();
+        var allocated = 0L;
+        var end = Time.unscaledTime + seconds;
+        while (Time.unscaledTime < end)
+        {
+            yield return null;
+            frames.Add(Time.unscaledDeltaTime * 1000f);
+            var now = UnityEngine.Profiling.Profiler.GetMonoUsedSizeLong();
+            if (now > heap) allocated += now - heap;
+            heap = now;
+        }
+        frames.Sort();
+        SetStatus($"Perf: {frames.Count} frames, mean {frames.Average():0.0} ms, p99 {frames[(int)(frames.Count * 0.99f)]:0.0} ms, max {frames[frames.Count - 1]:0.0} ms, GCs {System.GC.CollectionCount(0) - collections}, alloc {allocated / seconds / 1024f:0} KB/s, heap {heap / 1048576f:0} MB, incremental {UnityEngine.Scripting.GarbageCollector.isIncremental}");
+    }
+
     private static EffectData TestBlast() => new EffectData(EffectType.HP, positive: false, ActivationType.Usage, -900, -10, 0f);
 
     private Partner? FirstPartner => partners.Values.FirstOrDefault(p => p.Actor != null);
@@ -339,6 +358,15 @@ public sealed partial class Plugin
                 ActiveLevel.ImproveItemToRank(ranked, Rank.Elite, 100);
                 SetStatus($"Rank check {rankable.displayName}: data {before} -> {string.Join(",", rankable.requirements.Select(r => r.attribute + "=" + r.value))}, plain copy {string.Join(",", plain.itemRequirements.Select(r => r.attribute + "=" + r.value))}, ranked {string.Join(",", ranked.itemRequirements.Select(r => r.attribute + "=" + r.value))}");
                 break;
+            case "test-map-icons":
+                var mapLayers = new HashSet<int>(Object.FindObjectsOfType<MiniMapIconUI>(true).Select(icon => icon.gameObject.layer));
+                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), Object.FindObjectsOfType<Renderer>(true).Where(r => mapLayers.Contains(r.gameObject.layer))
+                    .Select(r => $"{PathOf(r.transform)} | {r.GetType().Name} | layer {LayerMask.LayerToName(r.gameObject.layer)} | icon {(r.GetComponentInParent<MiniMapIconUI>() is MiniMapIconUI ui ? (ui.fixedRotation ? "fixed" : "free") : "none")} | rot {r.transform.eulerAngles} | active {r.gameObject.activeInHierarchy}"));
+                SetStatus("Map icons dumped");
+                break;
+            case "test-portals":
+                SetStatus("Portals: " + string.Join("; ", Object.FindObjectsOfType<EnterPortal>().Select(portal => $"{portal.name} {portal.portalType} {portal.transform.position} active {portal.gameObject.activeInHierarchy}")));
+                break;
             case "test-back":
                 Player.PlayerChar.GetComponentInChildren<CharacterCustomizationDefaults>(true).SetBack(parts[1]);
                 break;
@@ -561,7 +589,7 @@ public sealed partial class Plugin
                 break;
             case "test-give":
                 var receiver = Player.PlayerChar;
-                if (!receiver.AddItemToInventory(new Item(SingletonBehaviour<FateDB>.Instance.AllItems.First(i => i.displayName == parts[1])), AddItemReason.Loot)) throw new InvalidOperationException("No room for " + parts[1]);
+                if (!receiver.AddItemToInventory(new Item(SingletonBehaviour<FateDB>.Instance.AllItems.First(i => i.displayName == string.Join(" ", parts.Skip(1)))), AddItemReason.Loot)) throw new InvalidOperationException("No room for " + parts[1]);
                 break;
             case "test-bag":
                 File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), Player.PlayerChar.inventory.SelectMany(i => new[] { i }.Concat(i.sockedtedItems ?? Enumerable.Empty<Item>()))
@@ -573,6 +601,25 @@ public sealed partial class Plugin
                 socketed.SetIdentified(true);
                 socketed.sockets = Math.Max(socketed.sockets, (socketed.sockedtedItems?.Count ?? 0) + 1);
                 socketed.SocketItem(new Item(SingletonBehaviour<FateDB>.Instance.AllItems.First(i => i.displayName == parts[1])));
+                break;
+            case "test-gem-drag":
+                var dragger = Player.PlayerChar;
+                var armed = dragger.inventory.First(i => i.equipped && i.IsInMainHand);
+                armed.SetIdentified(true);
+                armed.sockets = Math.Max(armed.sockets, (armed.sockedtedItems?.Count ?? 0) + 1);
+                var dragGem = dragger.inventory.Last(i => i.itemType == ItemType.Gem);
+                var gemUi = Object.FindObjectsOfType<ItemUI>().First(ui => ui.currentItem == dragGem);
+                CollidingSlotsRef(gemUi).Clear();
+                CollidingSlotsRef(gemUi).Add(Object.FindObjectsOfType<EquipmentSlotUI>().First(slot => !slot.IsOpen && slot.GetCurrentItemUI.currentItem == armed));
+                InventoryUI.draggedItemUI = gemUi;
+                gemUi.OnEndDrag(null);
+                SetStatus($"Gem drag: socketed {armed.sockedtedItems?.Contains(dragGem)}, in bag {dragger.inventory.Contains(dragGem)}, on ground {Object.FindObjectsOfType<DroppedItem>().Count(d => d.Item == dragGem)}");
+                break;
+            case "test-perf":
+                StartCoroutine(MeasureFrames(float.Parse(parts[1], CultureInfo.InvariantCulture)));
+                break;
+            case "test-unpatch":
+                harmony!.UnpatchSelf();
                 break;
             case "test-buff":
                 var buffer = Player.PlayerChar;
@@ -847,7 +894,7 @@ public sealed partial class Plugin
             dungeonRealm = SingletonBehaviour<PlayerStatus>.InstanceExists() ? SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm.ToString() : "",
             effectiveDepth = LevelGenerator.effectiveLevelDepth,
             runSections = string.Join(",", RunSections.Select(section => section.realm + ":" + section.offset)), dlcs = ownedDlcs,
-            netStats = string.Join("\n", NetStatLines()), primaryLevel = player != null ? player.Level : 0, sceneDrops = Object.FindObjectsOfType<DroppedItem>().Length, invincible = player != null && InvincibleRef(player), capeBend = player != null && player.GetComponentInChildren<CapeSwing>() is CapeSwing swing ? swing.Bend : -1f, dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
+            netStats = string.Join("\n", NetStatLines()), loadingShown = SingletonBehaviour<LoadingScreenUI>.InstanceExists() && SingletonBehaviour<LoadingScreenUI>.Instance.shown, primaryLevel = player != null ? player.Level : 0, inputState = SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.InstanceExists() ? $"{SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.Instance.ActiveInputMode} {SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.Instance.LocalInputBehavior} blockers {InputBlocker.uiBlockers} menus {InputBlocker.BlockingMenuCount} locked {BrokerMovementLocked(SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.Instance)}" : "", sceneDrops = Object.FindObjectsOfType<DroppedItem>().Length, invincible = player != null && InvincibleRef(player), capeBend = player != null && player.GetComponentInChildren<CapeSwing>() is CapeSwing swing ? swing.Bend : -1f, dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
             mirroringQuests = MirroringQuests, sharedQuestsReceived = sharedQuestsJson.Length > 0,
             giverQuests = string.Join(", ", Object.FindObjectsOfType<QuestGiver>().Where(giver => giver.Quest != null && giver.Quest.Status != Quest.QuestStatus.None).Select(giver => giver.CharacterName + ":" + giver.Quest.Status)),
             prompt = PromptUI.IsPromptActive ? PromptBodyRef(SingletonBehaviour<PromptUI>.Instance).text : "",
@@ -907,8 +954,8 @@ public sealed partial class Plugin
         public string dungeonRealm = "", monsterLevels = "", prompt = "", runSections = "";
         public int localDepth, effectiveDepth, itemDepth, dlcs;
         public float dayPhase, sunIntensity, capeBend;
-        public bool mirroringQuests, sharedQuestsReceived;
-        public string giverQuests = "", netStats = "";
+        public bool mirroringQuests, sharedQuestsReceived, loadingShown;
+        public string giverQuests = "", netStats = "", inputState = "";
         public int primaryLevel, sceneDrops;
         public string townNpcs = "", mainHand = "", localPet = "", fixtures = "", template = "", vitals = "", bagCheck = "", partnerIcon = "", partnerPetPortrait = "", buffs = "";
         public int replicaImpacts, skillPoints;

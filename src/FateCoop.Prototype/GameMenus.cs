@@ -208,7 +208,8 @@ public sealed partial class Plugin
         var keyboard = Keyboard.current;
         var gamepad = Gamepad.current;
         if (coopMenuOpen && ((keyboard != null && keyboard.escapeKey.wasPressedThisFrame) || (gamepad != null && gamepad.buttonEast.wasPressedThisFrame))) ShowCoopMenu(false);
-        if (pendingPrompts.Count > 0 && SingletonBehaviour<PromptUI>.InstanceExists() && !PromptUI.IsPromptActive)
+        if (!SceneLoad.IsInMainMenuScene) pendingPrompts.Clear();
+        else if (pendingPrompts.Count > 0 && SingletonBehaviour<PromptUI>.InstanceExists() && !PromptUI.IsPromptActive)
             SingletonBehaviour<PromptUI>.Instance.ShowPromptRaw(pendingPrompts.Dequeue(), null, twoButtons: false, "OK");
         if (hostPauseButton != null) foreach (var button in goToButtons) button.interactable = !InCombat;
         if (coopMenuOpen && playersButton != null && EventSystem.current.currentSelectedGameObject == playersButton.gameObject)

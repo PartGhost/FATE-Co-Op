@@ -18,7 +18,7 @@ public sealed partial class Plugin
     {
         if (keyboard != null && keyboard.f10Key.wasPressedThisFrame) showNetStats = !showNetStats;
         if (Time.unscaledDeltaTime >= HitchSeconds) hitches.Enqueue((Time.unscaledTime, Time.unscaledDeltaTime));
-        if (Time.unscaledDeltaTime >= LoggedFreezeSeconds) Logger.LogInfo($"Freeze of {Time.unscaledDeltaTime:0.00} s in {SceneLoad.CurrentScene}");
+        var collections = System.GC.CollectionCount(0);
         while (hitches.Count > 0 && hitches.Peek().time < Time.unscaledTime - HitchWindow) hitches.Dequeue();
         if (!Connected || Time.unscaledTime < nextPing) return;
         nextPing = Time.unscaledTime + PingInterval;

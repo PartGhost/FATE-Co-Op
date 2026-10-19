@@ -53,10 +53,15 @@ public sealed partial class Plugin
         }
         UpdateProgressBar();
         var party = PartyUiRef(hudOwner);
+        var layout = party.GetComponent<VerticalLayoutGroup>();
+        if (partners.Count == 0)
+        {
+            layout.spacing = partySpacing;
+            return;
+        }
         var allies = AllySlotsRef(party);
         var petSlot = PetSlotRef(party);
         var blocker = PartyBlockerRef(party).transform;
-        var layout = party.GetComponent<VerticalLayoutGroup>();
         layout.childScaleHeight = true;
         var gameSlots = allies.Append<PartyCharacterUI>(petSlot).Where(slot => slot.gameObject.activeSelf).ToList();
         var visible = partners.Values.Where(p => p.Frame != null && p.Name.Length > 0).ToList();

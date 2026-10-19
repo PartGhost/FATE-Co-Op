@@ -11,11 +11,11 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    private const float GroundInterval = 0.25f, GroundSettleTime = 0.6f, FixtureRetryTime = 2f;
+    private const float GroundInterval = 0.25f, FixtureRetryTime = 2f;
     private static readonly System.Reflection.MethodInfo ChestLockSetter = AccessTools.PropertySetter(typeof(ContainerInteractable), "IsLocked");
     private readonly Dictionary<int, Component> ground = new Dictionary<int, Component>();
     private readonly Dictionary<Component, int> groundIds = new Dictionary<Component, int>();
-    private readonly Dictionary<int, float> groundSeen = new Dictionary<int, float>();
+    private readonly Dictionary<Component, Vector3> landings = new Dictionary<Component, Vector3>();
     private readonly HashSet<int> announcedGround = new HashSet<int>(), pendingTakes = new HashSet<int>();
     private readonly HashSet<string> announcedFixtures = new HashSet<string>();
     private readonly List<Action> deferred = new List<Action>();
@@ -36,6 +36,7 @@ public sealed partial class Plugin
         harmony!.Patch(AccessTools.Method(typeof(DroppedItem), "Interact"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeItemPickup)));
         harmony.Patch(AccessTools.Method(typeof(GoldPileTrigger), "OnTriggerEnter"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeGoldPickup)));
         harmony.Patch(AccessTools.Method(typeof(Item), "Drop"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeItemDrop)));
+        harmony.Patch(AccessTools.Method(typeof(DroppedItem), nameof(DroppedItem.Drop)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterItemLanded)));
         harmony.Patch(AccessTools.Method(typeof(ContainerInteractable), "Interact"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeChestOpen)));
         harmony.Patch(AccessTools.Method(typeof(ContainerDestroyable), "Destroyed"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeBarrelBreak)));
         harmony.Patch(AccessTools.Method(typeof(ActiveLevel), "SpawnGoldPile"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeGoldSpawn)));
@@ -58,6 +59,11 @@ public sealed partial class Plugin
         }
         __result = null;
         return false;
+    }
+
+    private static void AfterItemLanded(DroppedItem __instance, Vector3 startPos, Vector3 targetLocation)
+    {
+        if (Active != null && Active.Connected) Active.landings[__instance] = ActiveLevel.AdjustPositionToNavMesh(targetLocation, startPos, performObstructionTest: true);
     }
 
     private static bool BeforeGoldSpawn(Vector3 position, int goldAmount)
@@ -117,11 +123,11 @@ public sealed partial class Plugin
     }
 
     private static IEnumerable<Component> GroundObjects() =>
-        UnityEngine.Object.FindObjectsOfType<DroppedItem>().Where(d => d.Item != null).Cast<Component>()
-            .Concat(UnityEngine.Object.FindObjectsOfType<GoldPileTrigger>().Where(g => !g.IsEmpty));
+        UnityEngine.Object.FindObjectsByType<DroppedItem>(FindObjectsSortMode.None).Where(d => d.Item != null).Cast<Component>()
+            .Concat(UnityEngine.Object.FindObjectsByType<GoldPileTrigger>(FindObjectsSortMode.None).Where(g => !g.IsEmpty));
 
-    private static GroundItem Describe(int id, Component obj) => obj is DroppedItem dropped
-        ? new GroundItem { id = id, position = dropped.transform.position, item = dropped.Item.GetItemSave() }
+    private GroundItem Describe(int id, Component obj) => obj is DroppedItem dropped
+        ? new GroundItem { id = id, position = landings.TryGetValue(dropped, out var landing) ? landing : dropped.transform.position, item = dropped.Item.GetItemSave() }
         : new GroundItem { id = id, position = obj.transform.position, gold = ((GoldPileTrigger)obj).GoldAmount };
 
     private void TrackGround(int id, Component obj)
@@ -132,9 +138,12 @@ public sealed partial class Plugin
 
     private void ForgetGround(int id)
     {
-        if (ground.TryGetValue(id, out var obj)) groundIds.Remove(obj);
+        if (ground.TryGetValue(id, out var obj))
+        {
+            groundIds.Remove(obj);
+            landings.Remove(obj);
+        }
         ground.Remove(id);
-        groundSeen.Remove(id);
         announcedGround.Remove(id);
         pendingTakes.Remove(id);
     }
@@ -169,7 +178,7 @@ public sealed partial class Plugin
     {
         ground.Clear();
         groundIds.Clear();
-        groundSeen.Clear();
+        landings.Clear();
         announcedGround.Clear();
         pendingTakes.Clear();
     }
@@ -202,10 +211,9 @@ public sealed partial class Plugin
             {
                 id = nextGroundId++;
                 TrackGround(id, obj);
-                groundSeen[id] = Time.unscaledTime;
             }
             seen.Add(id);
-            if (!inWorld || Time.unscaledTime - groundSeen[id] < GroundSettleTime || !announcedGround.Add(id)) continue;
+            if (!inWorld || !announcedGround.Add(id)) continue;
             SendWorld("ground", JsonUtility.ToJson(Describe(id, obj)));
         }
         foreach (var id in ground.Keys.Where(id => !seen.Contains(id)).ToList())
@@ -220,9 +228,9 @@ public sealed partial class Plugin
             announcedFixtures.Clear();
             SendWorld("ground-list", string.Join(",", announcedGround));
         }
-        foreach (var chest in UnityEngine.Object.FindObjectsOfType<ContainerInteractable>().Where(c => c.IsOpen))
+        foreach (var chest in UnityEngine.Object.FindObjectsByType<ContainerInteractable>(FindObjectsSortMode.None).Where(c => c.IsOpen))
             AnnounceFixture(FixtureKey("c", chest.transform.position));
-        foreach (var barrel in UnityEngine.Object.FindObjectsOfType<ContainerDestroyable>().Where(b => b.IsDestroyed))
+        foreach (var barrel in UnityEngine.Object.FindObjectsByType<ContainerDestroyable>(FindObjectsSortMode.None).Where(b => b.IsDestroyed))
             AnnounceFixture(FixtureKey("b", barrel.transform.position));
     }
 
@@ -364,6 +372,7 @@ public sealed partial class Plugin
             var barrel = Nearest(UnityEngine.Object.FindObjectsOfType<ContainerDestroyable>(), position);
             if (barrel != null) barrel.Destroyed();
         }
+        nextGroundSync = 0f;
     }
 
     private void ApplyFixture(string body)

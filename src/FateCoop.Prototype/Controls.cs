@@ -15,6 +15,7 @@ public sealed partial class Plugin
     private const string KeyboardScheme = "Keyboard";
     private static readonly System.Reflection.MethodInfo InputBehaviorSetter = AccessTools.PropertySetter(typeof(InputBroker), nameof(InputBroker.LocalInputBehavior));
     private static readonly string[] CameraKeys = { "<Keyboard>/w", "<Keyboard>/s", "<Keyboard>/a", "<Keyboard>/d" };
+    private static readonly AccessTools.FieldRef<ProdigyPlayer, Cleverous.Prodigy.PlayerInput> PlayerInputRef = AccessTools.FieldRefAccess<ProdigyPlayer, Cleverous.Prodigy.PlayerInput>("m_currentInput");
     private static readonly AccessTools.FieldRef<InputBroker, NavMeshAgent> BrokerAgent = AccessTools.FieldRefAccess<InputBroker, NavMeshAgent>("m_navMeshAgent");
     private static readonly AccessTools.FieldRef<InputBroker, bool> BrokerMovementLocked = AccessTools.FieldRefAccess<InputBroker, bool>("movementLocked");
     private static readonly AccessTools.FieldRef<InputBroker, bool> BrokerAttackWhenInRange = AccessTools.FieldRefAccess<InputBroker, bool>("attackWhenInRange");
@@ -37,7 +38,17 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(InputBroker), "ReadPressedInputs"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterReadInputs)));
         harmony.Patch(AccessTools.Method(typeof(ProdigyCamera), "UpdateCameraRotation"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeCameraRotation)));
         harmony.Patch(AccessTools.Method(typeof(MiniMapIconUI), "LateUpdate"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterMinimapIcon)));
+        harmony.Patch(AccessTools.Method(typeof(ProdigyPlayer), "LocalClientCollectInput"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeCollectInput)));
         harmony.Patch(AccessTools.Method(typeof(InputBroker), "InputActionChangeCallback"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeInputModeCheck)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterInputModeCheck)));
+    }
+
+    private static bool BeforeCollectInput(ProdigyPlayer __instance)
+    {
+        var plugin = Active;
+        if (plugin == null || !plugin.keyboardMoving || !InputBlocker.Blocked) return true;
+        var walking = BrokerAgent(SingletonBehaviour<InputBroker>.Instance).desiredVelocity;
+        PlayerInputRef(__instance).Set(walking, walking, walking, interact: false, altInteract: false, cycle: false, fire1: false, fire2: false, rage: false);
+        return false;
     }
 
     private bool MovementBlocked => InputBlocker.AnyBlockingUiMenuIsOpen || InventoryUI.IsDraggingItem || downed;
@@ -59,7 +70,7 @@ public sealed partial class Plugin
 
     private static void AfterMinimapIcon(MiniMapIconUI __instance)
     {
-        if (Active == null || !__instance.fixedRotation) return;
+        if (Active == null) return;
         var saved = SavedIconRotation(__instance);
         if (__instance.isCamera)
         {
@@ -94,8 +105,9 @@ public sealed partial class Plugin
         var agent = BrokerAgent(__instance);
         if (plugin == null || player == null || agent == null || !agent.enabled || !agent.isOnNavMesh) return;
         var testing = plugin.testMove != Vector2.zero;
+        if (testing) BrokerMovementLocked(__instance) = false;
         var input = testing ? plugin.testMove : __instance.Inputs.Persistent.Move.ReadValue<Vector2>();
-        var allowed = input.sqrMagnitude > 0.01f && !plugin.MovementBlocked && __instance.ActiveInputMode == InputBroker.InputMode.Game && (testing || !BrokerMovementLocked(__instance))
+        var allowed = input.sqrMagnitude > 0.01f && !plugin.MovementBlocked && __instance.ActiveInputMode == InputBroker.InputMode.Game && !BrokerMovementLocked(__instance)
             && !player.PerformingAttack() && !player.PerformingCast() && !player.Fishing();
         if (!allowed)
         {

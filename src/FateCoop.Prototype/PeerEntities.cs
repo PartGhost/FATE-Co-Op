@@ -125,11 +125,14 @@ public sealed partial class Plugin
         return false;
     }
 
-    private Partner? PartnerOf(Character? character) => character == null ? null : partners.Values.FirstOrDefault(p => p.Actor == character);
+    private Partner? PartnerOf(Character? character) => StandInOf(character, companion: false);
 
-    private Partner? PartnerOfPet(Character? character) => character == null ? null : partners.Values.FirstOrDefault(p => p.Pet.Copy == character || p.Summons.Any(s => s.Copy == character));
+    private Partner? PartnerOfPet(Character? character) => StandInOf(character, companion: true);
 
-    private bool IsStandIn(Character? character) => PartnerOf(character) != null || PartnerOfPet(character) != null;
+    private Partner? StandInOf(Character? character, bool companion) =>
+        character != null && character.TryGetComponent<StandIn>(out var standIn) && standIn.Companion == companion && partners.TryGetValue(standIn.PartnerId, out var partner) ? partner : null;
+
+    private bool IsStandIn(Character? character) => character != null && character.TryGetComponent<StandIn>(out _);
 
     private static bool LocalRunning() => Player.PlayerChar != null && Player.PlayerChar.Running();
 
@@ -217,7 +220,9 @@ public sealed partial class Plugin
         finally { buildingActor = false; }
     }
 
-    private static string Outfit(Profile profile) => profile.name + JsonUtility.ToJson(new ItemStorage { items = profile.equipment });
+    private static string Outfit(Profile profile) => profile.name + string.Join(";", profile.equipment.Select(item => string.Join("|", item.slotIndex, item.weaponSet, item.baseName, item.name, item.namePrefix, item.nameSuffix,
+        item.uniqueNamePrefixKey1, item.uniqueNamePrefixKey2, item.rank, item.grade, item.unique, item.artifact, item.identified, string.Join(",", item.damageBonuses?.Select(bonus => bonus.type) ?? Enumerable.Empty<DamageType>()),
+        string.Join(",", item.internalItems?.Select(gem => gem.baseName) ?? Enumerable.Empty<string>()))));
 
     private void Spawn(Partner partner, Vector3 position)
     {
@@ -229,6 +234,7 @@ public sealed partial class Plugin
         var spawned = Object.Instantiate(SingletonBehaviour<FateDB>.Instance.partyMemberPrefab, position, Quaternion.identity);
         var actor = spawned.GetComponent<PartyMember>();
         spawned.name = "FateCoop_Partner_" + partner.Id;
+        spawned.AddComponent<StandIn>().PartnerId = partner.Id;
         partner.Actor = actor;
         actor.SetMasterCharacter(player);
         actor.onProfilePictureChanged += picture => KeepPortrait(partner, picture);
@@ -302,20 +308,29 @@ public sealed partial class Plugin
     private void ApplySummons(Partner partner, List<PetSnapshot> summons, float time)
     {
         if (summons.Count > MaxSummons) throw new InvalidOperationException("Too many summons.");
-        while (partner.Summons.Count > summons.Count)
+        var spare = partner.Summons.ToList();
+        partner.Summons.Clear();
+        try
         {
-            partner.Summons[partner.Summons.Count - 1].Despawn();
-            partner.Summons.RemoveAt(partner.Summons.Count - 1);
+            foreach (var summon in summons)
+            {
+                var companion = spare.FirstOrDefault(c => c.Model == summon.model) ?? new Companion();
+                spare.Remove(companion);
+                partner.Summons.Add(companion);
+                ApplyCompanion(partner, companion, summon, time);
+            }
         }
-        while (partner.Summons.Count < summons.Count) partner.Summons.Add(new Companion());
-        for (var i = 0; i < summons.Count; i++) ApplyCompanion(partner, partner.Summons[i], summons[i], time);
+        finally
+        {
+            foreach (var gone in spare) gone.Despawn();
+        }
     }
 
     private void ApplyCompanion(Partner partner, Companion companion, PetSnapshot pet, float time)
     {
         if (pet == null || !pet.present) { companion.Despawn(); return; }
         if (!FinitePosition(pet.position) || !Finite(pet.yaw) || pet.model.Length > 128 || pet.name.Length > 64) throw new InvalidOperationException("Invalid pet state.");
-        if (!NavMesh.SamplePosition(pet.position, out var hit, 3f, NavMesh.AllAreas)) { companion.Despawn(); return; }
+        if (!NavMesh.SamplePosition(pet.position, out var hit, 3f, NavMesh.AllAreas)) return;
         if (companion.Copy == null || companion.Model != pet.model)
         {
             companion.Despawn();
@@ -325,6 +340,9 @@ public sealed partial class Plugin
             var copy = obj.GetComponent<Character>();
             if (copy == null) { Object.Destroy(obj); throw new InvalidOperationException("Pet prefab has no Character."); }
             obj.name = "FateCoop_Partner_Pet_" + partner.Id;
+            var standIn = obj.AddComponent<StandIn>();
+            standIn.PartnerId = partner.Id;
+            standIn.Companion = true;
             companion.Copy = copy;
             companion.Model = pet.model;
             copy.SetMasterCharacter(partner.Actor);
@@ -355,4 +373,10 @@ public sealed partial class Plugin
         }
         UpdateMirrors();
     }
+}
+
+public sealed class StandIn : MonoBehaviour
+{
+    public int PartnerId;
+    public bool Companion;
 }
