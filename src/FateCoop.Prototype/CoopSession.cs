@@ -11,7 +11,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.26.0";
+    internal const string Version = "0.27.0";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     internal const int HostId = 0;
     private const int Everyone = -1, Unassigned = -2;
@@ -87,6 +87,7 @@ public sealed partial class Plugin
             });
             if (commandLineLobby != 0) JoinSteam(new CSteamID(commandLineLobby));
         }
+        DeliverDeferred();
         if (link == null) return;
         if (link.CloseReason.Length > 0) { EndSession(link.CloseReason); return; }
         while (link != null && link.TryReceive(out var peer, out var message)) Receive(peer, message);
@@ -247,7 +248,8 @@ public sealed partial class Plugin
             case "take": GiveTake(partner, envelope.body); break;
             case "granted": ReceiveGranted(envelope.body); break;
             case "drop": ReceiveDrop(envelope.body); break;
-            case "use-fixture": UseFixture(envelope.body); break;
+            case "use-fixture": UseFixture(partner, envelope.body); break;
+            case "key-used": SpendChestKey(); break;
             case "fixture": ApplyFixture(envelope.body); break;
             case "quests": ReceiveQuests(envelope.body); break;
             case "quest-progress": MergeProgress(envelope.body); break;
@@ -301,6 +303,8 @@ public sealed partial class Plugin
     private void DropPartner(Partner partner, string reason)
     {
         if (!partners.Remove(partner.Id)) return;
+        lastPlaces.Remove(partner.Id);
+        foreach (var relay in awayRelays.Keys.Where(relay => relay.from == partner.Id || relay.to == partner.Id).ToList()) awayRelays.Remove(relay);
         Despawn(partner);
         if (partner.Portal != null) UnityEngine.Object.Destroy(partner.Portal);
         if (partner.TownPortal != null) UnityEngine.Object.Destroy(partner.TownPortal);
@@ -314,7 +318,11 @@ public sealed partial class Plugin
         if (link == null) return;
         if (downed) DieForReal();
         foreach (var partner in partners.Values.ToList()) DropPartner(partner, "");
-        if (!OwnsWorld) TakeOwnership();
+        if (!OwnsWorld)
+        {
+            ResetGround();
+            TakeOwnership();
+        }
         link.Dispose();
         link = null;
         isHost = true;

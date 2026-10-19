@@ -138,7 +138,12 @@ public static class ModFiles
                 var target = Path.GetFullPath(Path.Combine(game, entry.FullName));
                 if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The mod zip has a file outside the game folder: " + entry.FullName);
                 var file = target.Substring(root.Length);
-                if (File.Exists(target) && !owned.Contains(file) && !file.StartsWith(PluginFolder, StringComparison.OrdinalIgnoreCase)) continue;
+                if (File.Exists(target) && !owned.Contains(file) && !file.StartsWith(PluginFolder, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (file.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !SameFile(entry, target))
+                        throw new InvalidOperationException("FATE already has a different BepInEx installed (" + file + "). FATE Co-Op needs its own BepInEx build: remove the other BepInEx and the mods that use it first, then install again.");
+                    continue;
+                }
                 var staged = Path.Combine(staging, file);
                 Directory.CreateDirectory(Path.GetDirectoryName(staged));
                 entry.ExtractToFile(staged, true);
@@ -148,6 +153,8 @@ public static class ModFiles
         var backup = BackupSaves();
         var plugin = Path.Combine(game, PluginFolder);
         if (Directory.Exists(plugin)) Directory.Delete(plugin, true);
+        Directory.CreateDirectory(plugin);
+        File.WriteAllLines(Path.Combine(plugin, Manifest), new[] { version }.Concat(files));
         foreach (var file in files)
         {
             var target = Path.Combine(game, file);
@@ -155,8 +162,15 @@ public static class ModFiles
             File.Copy(Path.Combine(staging, file), target, true);
         }
         Directory.Delete(staging, true);
-        File.WriteAllLines(Path.Combine(plugin, Manifest), new[] { version }.Concat(files));
         return backup;
+    }
+
+    private static bool SameFile(ZipArchiveEntry entry, string path)
+    {
+        using var packed = entry.Open();
+        using var copy = new MemoryStream();
+        packed.CopyTo(copy);
+        return copy.ToArray().SequenceEqual(File.ReadAllBytes(path));
     }
 
     public static bool Remove(string game)

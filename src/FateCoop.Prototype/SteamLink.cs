@@ -100,7 +100,15 @@ internal sealed class SteamLink : IPeerLink
     private void OnSessionRequested(SteamNetworkingMessagesSessionRequest_t request)
     {
         var remote = request.m_identityRemote;
-        if (ids.ContainsKey(remote.GetSteamID())) SteamNetworkingMessages.AcceptSessionWithUser(ref remote);
+        var user = remote.GetSteamID();
+        if (ids.ContainsKey(user) || (lobby.IsValid() && InLobby(user))) SteamNetworkingMessages.AcceptSessionWithUser(ref remote);
+    }
+
+    private bool InLobby(CSteamID user)
+    {
+        for (var i = 0; i < SteamMatchmaking.GetNumLobbyMembers(lobby); i++)
+            if (SteamMatchmaking.GetLobbyMemberByIndex(lobby, i) == user) return true;
+        return false;
     }
 
     public void Send(int peer, byte[] message, bool reliable)

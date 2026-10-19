@@ -38,13 +38,31 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(QuestManager), "LoadSave"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterRunQuestsLoaded)));
         harmony.Patch(AccessTools.Method(typeof(ActiveLevel), nameof(ActiveLevel.DigGreedilyAfterDeepestDepthReached)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterDeepestDepth)));
         harmony.Patch(AccessTools.Method(typeof(Character), nameof(Character.TweakToLevel)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeMonsterLevel)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterMonsterLevel)));
+        harmony.Patch(AccessTools.Method(typeof(LevelGenerator), nameof(LevelGenerator.OutfitCharacter)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeOutfit)), finalizer: new HarmonyMethod(typeof(Plugin), nameof(AfterOutfit)));
+        harmony.Patch(AccessTools.Method(typeof(ActiveLevel), nameof(ActiveLevel.GetCurrentDungeonDepth)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterCurrentDepth)));
+    }
+
+    private static bool outfittingMonster;
+
+    private static void BeforeOutfit() => outfittingMonster = true;
+
+    private static Exception? AfterOutfit(Exception? __exception)
+    {
+        outfittingMonster = false;
+        return __exception;
+    }
+
+    private static void AfterCurrentDepth(ref int __result)
+    {
+        if (LevelGenerator.currentInstance == null) __result = ActiveLevel.DigGreedilyAfterDeepestDepthReached();
+        else if (__result > 0) __result = RunFloor(SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm, __result);
     }
 
     private static void BeforeMonsterLevel(Character __instance, out int __state) => __state = __instance.maxHpBase;
 
     private static void AfterMonsterLevel(Character __instance, int __state)
     {
-        if (!(__instance is Monster) || __instance is Pet || __instance.HasMaster() || RunFloorHere() <= MonsterLevelKnee) return;
+        if (!outfittingMonster || RunFloorHere() <= MonsterLevelKnee) return;
         __instance.maxHpBase = __state + Mathf.CeilToInt((__instance.maxHpBase - __state) * MonsterLevelSlope);
         __instance.hp = __instance.MaxHP();
     }

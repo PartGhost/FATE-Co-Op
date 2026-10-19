@@ -11,7 +11,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    private const float KeyboardStep = 1.5f;
+    private const float KeyboardStep = 1.5f, StickTurnSpeed = 120f;
     private const string KeyboardScheme = "Keyboard";
     private static readonly System.Reflection.MethodInfo InputBehaviorSetter = AccessTools.PropertySetter(typeof(InputBroker), nameof(InputBroker.LocalInputBehavior));
     private static readonly string[] CameraKeys = { "<Keyboard>/w", "<Keyboard>/s", "<Keyboard>/a", "<Keyboard>/d" };
@@ -121,6 +121,8 @@ public sealed partial class Plugin
         if (plugin == null || mouse == null) return true;
         if (mouse.middleButton.wasPressedThisFrame) plugin.dragStart = mouse.position.ReadValue();
         if (mouse.middleButton.isPressed && !plugin.MovementBlocked) plugin.cameraYaw += mouse.delta.ReadValue().x * plugin.cameraTurnSpeed;
+        var broker = SingletonBehaviour<InputBroker>.Instance;
+        if (!broker.HoldingSpellWheel) plugin.cameraYaw -= broker.CameraRotateInputValue * StickTurnSpeed * Time.unscaledDeltaTime;
         plugin.cameraYaw += plugin.testTurn;
         if (mouse.middleButton.wasReleasedThisFrame) mouse.WarpCursorPosition(plugin.dragStart);
         var original = CameraOriginalRotation(__instance).eulerAngles;

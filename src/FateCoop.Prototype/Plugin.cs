@@ -72,6 +72,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallBagSortHooks();
             InstallRunHooks();
             InstallCapeHooks();
+            InstallGameFixHooks();
             if (testTools) InstallDevHooks();
             commandLineLobby = LobbyFromArguments(Environment.GetCommandLineArgs());
             SetStatus("Ready.");
@@ -124,6 +125,8 @@ public sealed partial class Plugin : BaseUnityPlugin
         transitioning = true;
         worldReady = false;
         if (pendingWorld == null) requestedWorld = "";
+        heldTravel = null;
+        heldDepth = 0;
         layoutHash = "";
         worldKey = "";
         EndDowned();

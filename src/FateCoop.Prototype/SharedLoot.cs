@@ -17,7 +17,8 @@ public sealed partial class Plugin
     private readonly Dictionary<Component, int> groundIds = new Dictionary<Component, int>();
     private readonly Dictionary<int, float> groundSeen = new Dictionary<int, float>();
     private readonly HashSet<int> announcedGround = new HashSet<int>(), pendingTakes = new HashSet<int>();
-    private readonly HashSet<string> announcedFixtures = new HashSet<string>(), keyedChests = new HashSet<string>();
+    private readonly HashSet<string> announcedFixtures = new HashSet<string>();
+    private readonly List<Action> deferred = new List<Action>();
     private readonly Dictionary<string, float> fixtureRetry = new Dictionary<string, float>();
     private int nextGroundId = 1, lootGiven, lootTaken, dropsSent;
     private float nextGroundSync, nextGroundCheck;
@@ -76,7 +77,7 @@ public sealed partial class Plugin
             return false;
         }
         if (!Player.PlayerChar.inventory.Any(item => item.itemType == ItemType.ChestKey)) return true;
-        if (Active!.RequestFixture("k", position)) Active.keyedChests.Add(FixtureKey("c", position));
+        Active!.RequestFixture("k", position);
         return false;
     }
 
@@ -151,9 +152,11 @@ public sealed partial class Plugin
         UnityEngine.Object.Destroy(obj.gameObject);
     }
 
+    private static bool InTown => SceneLoad.CurrentScene == Tableflip.Scene.Town_Grove;
+
     private void ReleaseSharedGround()
     {
-        if (!OwnsWorld || !WorldPartners().Any()) return;
+        if (!OwnsWorld || InTown || !WorldPartners().Any()) return;
         foreach (var id in announcedGround) RemoveGroundObject(ground[id]);
     }
 
@@ -162,17 +165,27 @@ public sealed partial class Plugin
         foreach (var obj in ground.Values.Where(obj => obj != null)) Send("drop", JsonUtility.ToJson(Describe(0, obj)), owner, worldScoped: true);
     }
 
-    private void ResetGround()
+    private void ClearGroundTracking()
     {
-        if (!OwnsWorld) foreach (var obj in ground.Values) RemoveGroundObject(obj);
         ground.Clear();
         groundIds.Clear();
         groundSeen.Clear();
         announcedGround.Clear();
         pendingTakes.Clear();
+    }
+
+    private void DiscardGround()
+    {
+        foreach (var obj in ground.Values) RemoveGroundObject(obj);
+        ClearGroundTracking();
+    }
+
+    private void ResetGround()
+    {
+        if (OwnsWorld) ClearGroundTracking();
+        else DiscardGround();
         announcedFixtures.Clear();
         fixtureRetry.Clear();
-        keyedChests.Clear();
         nextGroundId = 1;
     }
 
@@ -298,9 +311,9 @@ public sealed partial class Plugin
         if (ground.TryGetValue(entry.id, out var replica)) RemoveGroundObject(replica);
         ForgetGround(entry.id);
         var player = Player.PlayerChar;
-        if (player == null)
+        if (player == null || transitioning)
         {
-            SendToOwner("drop", body);
+            deferred.Add(() => ReceiveGranted(body));
             return;
         }
         if (entry.gold > 0)
@@ -316,7 +329,7 @@ public sealed partial class Plugin
             var stored = (item.itemType == ItemType.Potion && player.TryGetFirstFreeHotbarSlot(out var slot) && player.AddItemToHotbar(item, slot, AddItemReason.Loot))
                 || player.AddItemToInventory(item, AddItemReason.Loot);
             if (stored) item.PlayTakeSound();
-            else SendToOwner("drop", JsonUtility.ToJson(new GroundItem { position = player.transform.position, item = entry.item }));
+            else DropToOwner(JsonUtility.ToJson(new GroundItem { position = player.transform.position, item = entry.item }));
         }
         lootTaken++;
     }
@@ -329,7 +342,7 @@ public sealed partial class Plugin
         else ToItem(entry.item).Drop(entry.position);
     }
 
-    private void UseFixture(string body)
+    private void UseFixture(Partner partner, string body)
     {
         if (!OwnsWorld) return;
         var parts = body.Split('|');
@@ -339,7 +352,11 @@ public sealed partial class Plugin
         {
             var chest = Nearest(UnityEngine.Object.FindObjectsOfType<ContainerInteractable>(), position);
             if (chest == null || chest.IsOpen) return;
-            if (parts[0] == "k") ChestLockSetter.Invoke(chest, new object[] { false });
+            if (parts[0] == "k" && chest.IsLocked)
+            {
+                ChestLockSetter.Invoke(chest, new object[] { false });
+                Send("key-used", "", partner.Id);
+            }
             chest.Interact(Player.PlayerChar);
         }
         else
@@ -360,8 +377,6 @@ public sealed partial class Plugin
         {
             if (parts[0] == "c")
             {
-                var key = keyedChests.Remove(body) ? Player.PlayerChar.inventory.FirstOrDefault(item => item.itemType == ItemType.ChestKey) : null;
-                if (key != null) Player.PlayerChar.RemoveItemFromInventory(key, RemoveItemReason.Consumed);
                 var chest = Nearest(UnityEngine.Object.FindObjectsOfType<ContainerInteractable>(), position);
                 if (chest == null || chest.IsOpen) return;
                 chest.Init(false, 0, TrapType.TrapNone, new List<Item>(), false);
@@ -378,23 +393,36 @@ public sealed partial class Plugin
         finally { applyingFixture = false; }
     }
 
+    private void SpendChestKey()
+    {
+        var key = Player.PlayerChar?.inventory.FirstOrDefault(item => item.itemType == ItemType.ChestKey);
+        if (key != null) Player.PlayerChar!.RemoveItemFromInventory(key, RemoveItemReason.Consumed);
+    }
+
     private void RealizeGround()
     {
-        var copies = ground.ToList();
         nextGroundId = ground.Keys.DefaultIfEmpty(0).Max() + 1;
-        foreach (var entry in copies)
+        var copies = ground.Values.Where(obj => obj != null).Select(obj => Describe(0, obj)).ToList();
+        DiscardGround();
+        foreach (var item in copies)
         {
-            if (entry.Value == null) continue;
-            var item = Describe(entry.Key, entry.Value);
-            RemoveGroundObject(entry.Value);
             if (item.gold > 0) ActiveLevel.SpawnGoldPile(item.position, item.gold);
             else ToItem(item.item).Drop(item.position, skipSoundAndDropTween: true);
         }
-        ground.Clear();
-        groundIds.Clear();
-        groundSeen.Clear();
-        announcedGround.Clear();
-        pendingTakes.Clear();
+    }
+
+    private void DeliverDeferred()
+    {
+        if (deferred.Count == 0 || Player.PlayerChar == null || transitioning) return;
+        var due = deferred.ToList();
+        deferred.Clear();
+        foreach (var deliver in due) deliver();
+    }
+
+    private void DropToOwner(string body)
+    {
+        if (OwnsWorld) ReceiveDrop(body);
+        else SendToOwner("drop", body);
     }
 
     private static T? Nearest<T>(IEnumerable<T> candidates, Vector3 position) where T : Component =>

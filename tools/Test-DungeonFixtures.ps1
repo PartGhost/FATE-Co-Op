@@ -29,8 +29,6 @@ Send ('follow-partner ' + (State a).myId) 'b'
 $start = Wait-Pair { param($a, $b) $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and !$b.transitioning -and $b.fixtures -ne '' -and $a.fixtures -eq $b.fixtures } 'Guest on the same floor with the same fixtures' 90
 Send 'test-resume' 'a'
 Send 'test-resume' 'b'
-Send 'test-invincible on' 'a'
-Send 'test-invincible on' 'b'
 Write-Output ('Both players see ' + $start.a.fixtures + ' on the ' + $start.a.template + ' floor.')
 
 Send 'test-fixture Crystal' 'b'

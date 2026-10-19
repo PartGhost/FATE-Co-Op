@@ -27,6 +27,7 @@ function Converged($a, $b) { $a.monstersTracked -gt 0 -and $b.monstersTracked -e
 
 $start = State a
 & (Join-Path $PSScriptRoot 'Enter-HostDungeon.ps1') | Out-Null
+Send 'test-invincible off' 'b'
 $paired = Wait-Pair { param($a, $b) $a.dungeonDepth -ge 1 -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $a.guestId -ne 0 -and $b.guestId -ne 0 -and (Converged $a $b) } 'Shared floor with matching monsters' 90
 Send 'test-resume' 'a'
 Send 'test-resume' 'b'

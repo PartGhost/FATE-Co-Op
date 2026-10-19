@@ -10,7 +10,7 @@ namespace FateCoop.Prototype;
 public sealed partial class Plugin
 {
     private const int CapeLinks = 3;
-    private const float CapePinned = 0.15f, CapeDrag = 1f, CapeStiffness = 70f, CapeDamping = 9f, CapeTeleportSpeed = 20f;
+    private const float CapePinned = 0.15f, CapeDrag = 3f, CapeStiffness = 35f, CapeDamping = 9f, CapeTeleportDistance = 1f;
     private static readonly HashSet<string> RigidBackItems = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "Item_BloodQuiver", "Item_ForestQuiver", "Item_GoblinQuiver", "Item_LightQuiver", "Item_RoyalQuiver", "Item_BroadwingMagicalWings", "Item_TravelerBackpack",
@@ -18,7 +18,7 @@ public sealed partial class Plugin
     };
     private static readonly AccessTools.FieldRef<CharacterCustomizationDefaults, CharacterCustomizationDefaults.CustomizationCategory> BackRef =
         AccessTools.FieldRefAccess<CharacterCustomizationDefaults, CharacterCustomizationDefaults.CustomizationCategory>("back");
-    private static readonly Dictionary<Mesh, CapeRig> CapeRigs = new Dictionary<Mesh, CapeRig>();
+    private static readonly Dictionary<Mesh, CapeRig?> CapeRigs = new Dictionary<Mesh, CapeRig?>();
 
     private sealed class CapeRig
     {
@@ -39,20 +39,22 @@ public sealed partial class Plugin
         if (string.IsNullOrEmpty(backKey) || RigidBackItems.Contains(backKey.TrimEnd()) || !renderer.gameObject.activeSelf) return;
         var source = renderer.sharedMesh;
         if (!CapeRigs.TryGetValue(source, out var rig)) CapeRigs[source] = rig = RigCape(source, renderer.bones);
-        renderer.gameObject.AddComponent<CapeSwing>().Attach(renderer, rig);
+        if (rig != null) renderer.gameObject.AddComponent<CapeSwing>().Attach(renderer, rig);
     }
 
-    private static CapeRig RigCape(Mesh source, Transform[] bones)
+    private static CapeRig? RigCape(Mesh source, Transform[] bones)
     {
         var mesh = ReadableCopy(source);
         var bindposes = mesh.bindposes;
         var vertices = mesh.vertices;
+        if (vertices.Length == 0) return null;
         var spine = Array.FindIndex(bones, bone => bone.name.EndsWith("_Spine1", StringComparison.Ordinal));
         Vector3 joint(string suffix) => bindposes[Array.FindIndex(bones, bone => bone.name.EndsWith(suffix, StringComparison.Ordinal))].inverse.MultiplyPoint3x4(Vector3.zero);
         var up = (joint("_Head") - joint("_Pelvis")).normalized;
         var heights = vertices.Select(vertex => Vector3.Dot(vertex, up)).ToArray();
         var top = heights.Max();
         var length = top - heights.Min();
+        if (!(length > 0f)) return null;
         var depth = heights.Select(height => (top - height) / length).ToArray();
         Vector3 centre(float along)
         {
@@ -109,7 +111,7 @@ public sealed partial class Plugin
     {
         private SkinnedMeshRenderer target = null!;
         private Transform[] originalBones = null!, chain = null!;
-        private Vector3[] restTips = null!, tips = null!, previous = null!;
+        private Vector3[] restTips = null!, tips = null!, previous = null!, lastRests = null!;
         private Vector3 lastRoot;
 
         internal float Bend => chain.Take(CapeLinks).Max(link => Quaternion.Angle(Quaternion.identity, link.localRotation));
@@ -142,6 +144,7 @@ public sealed partial class Plugin
         {
             tips = chain.Skip(1).Select(link => link.position).ToArray();
             previous = tips.ToArray();
+            lastRests = tips.ToArray();
             lastRoot = chain[0].position;
         }
 
@@ -150,24 +153,27 @@ public sealed partial class Plugin
             var dt = Mathf.Min(Time.deltaTime, 0.05f);
             if (dt <= 0f) return;
             var root = chain[0].position;
-            var velocity = (root - lastRoot) / dt;
+            var jump = root - lastRoot;
             lastRoot = root;
-            if (velocity.magnitude > CapeTeleportSpeed)
+            if (jump.sqrMagnitude > CapeTeleportDistance * CapeTeleportDistance)
             {
                 foreach (var link in chain) link.localRotation = Quaternion.identity;
                 Settle();
                 return;
             }
-            var push = -velocity * CapeDrag * dt * dt;
             for (var i = 0; i < CapeLinks; i++)
             {
                 var link = chain[i];
                 link.localRotation = Quaternion.identity;
                 var head = link.position;
                 var rest = link.TransformPoint(restTips[i]);
-                var moved = (tips[i] - previous[i]) * Mathf.Exp(-CapeDamping * dt);
+                var carry = rest - lastRests[i];
+                lastRests[i] = rest;
+                tips[i] += carry;
+                previous[i] += carry;
+                var momentum = (tips[i] - previous[i]) * Mathf.Exp(-CapeDamping * dt);
                 previous[i] = tips[i];
-                tips[i] += moved + push + (rest - tips[i]) * CapeStiffness * dt * dt;
+                tips[i] += momentum - carry * CapeDrag * dt + (rest - tips[i]) * CapeStiffness * dt * dt;
                 tips[i] = head + (tips[i] - head).normalized * (rest - head).magnitude;
                 link.localRotation = Quaternion.FromToRotation(restTips[i], link.InverseTransformPoint(tips[i]));
             }

@@ -20,7 +20,8 @@ public sealed partial class Plugin
     private WorldSnapshot? pendingWorld, joiningWorld;
     private Action? heldTravel;
     private Vector3? arrivePoint;
-    private float heldUntil, worldBorn;
+    private float heldUntil, worldBorn, requestedUntil;
+    private readonly HashSet<string> failedWorlds = new HashSet<string>();
     private bool heldGoesDown = true, replayingTravel;
 
     [Serializable] private sealed class WorldSnapshot
@@ -101,24 +102,39 @@ public sealed partial class Plugin
     }
 
     private PeerFrame? ReadyAt(int depth) => partners.Values.Select(p => p.Frame)
-        .Where(f => f != null && f.scene == Tableflip.Scene.Dungeon.ToString() && f.depth == depth && f.worldKey.Length > 0 && f.owner != myId).OrderBy(f => f!.worldBorn).ThenBy(f => f!.owner).FirstOrDefault();
+        .Where(f => f != null && f.scene == Tableflip.Scene.Dungeon.ToString() && f.depth == depth && f.worldKey.Length > 0 && f.owner != myId && !failedWorlds.Contains(f.worldKey)).OrderBy(f => f!.worldBorn).ThenBy(f => f!.owner).FirstOrDefault();
 
     private void RequestWorld(PeerFrame target)
     {
         requestedWorld = target.worldKey;
+        requestedUntil = Time.unscaledTime + JoinWait;
         Send("world-request", target.worldKey, target.owner);
     }
 
     private void UpdateHeldTravel()
     {
+        if (heldTravel != null && downed)
+        {
+            heldTravel = null;
+            heldDepth = 0;
+            requestedWorld = "";
+            Player.PlayerChar?.SetInvincible(false);
+            return;
+        }
+        if (transitioning) return;
         if (heldTravel != null && heldDepth > 0 && ReadyAt(heldDepth) is PeerFrame arrived)
         {
             RequestWorld(arrived);
             heldDepth = 0;
             heldUntil = Time.unscaledTime + JoinWait;
         }
-        if (heldTravel == null || Time.unscaledTime < heldUntil) return;
+        if (heldTravel != null && Time.unscaledTime >= heldUntil) ReleaseHeldTravel();
+    }
+
+    private void ReleaseHeldTravel()
+    {
         var travel = heldTravel;
+        if (travel == null) return;
         heldTravel = null;
         requestedWorld = "";
         replayingTravel = true;
@@ -183,14 +199,19 @@ public sealed partial class Plugin
             }
             else
             {
-                if (joiningWorld != null) Logger.LogError("FLOOR_LAYOUT_MISMATCH expected=" + joiningWorld.layoutHash + " actual=" + layoutHash);
+                if (joiningWorld != null)
+                {
+                    Logger.LogError("FLOOR_LAYOUT_MISMATCH expected=" + joiningWorld.layoutHash + " actual=" + layoutHash);
+                    failedWorlds.Add(joiningWorld.worldKey);
+                }
+                arrivePoint = null;
                 worldKey = sessionId + ":" + worldEpoch + ":" + layoutHash;
                 worldBorn = SessionTime();
                 worldOwner = myId;
             }
         }
         else worldOwner = partners.Values.Where(p => p.InWorld(TownKey)).Select(p => p.Frame!.owner).DefaultIfEmpty(myId).Min();
-        joiningWorld = null;
+        joiningWorld = pendingWorld = null;
         requestedWorld = "";
         travelDepth = 0;
         ArriveNearPartner();
@@ -231,7 +252,7 @@ public sealed partial class Plugin
     {
         var snapshot = JsonUtility.FromJson<WorldSnapshot>(body);
         if (snapshot == null || snapshot.worldKey != requestedWorld) return;
-        if (transitioning) { requestedWorld = ""; return; }
+        if (transitioning || downed) { requestedWorld = ""; return; }
         JoinWorld(partner.Id, snapshot);
     }
 
@@ -267,7 +288,13 @@ public sealed partial class Plugin
         if (key.Length == 0) return;
         if (!OwnsWorld)
         {
-            if (partners.TryGetValue(worldOwner, out var owner) && owner.InWorld(key)) return;
+            if (partners.TryGetValue(worldOwner, out var owner) && owner.InWorld(key) && owner.Frame!.owner == owner.Id) return;
+            var claimant = WorldPartners().Where(p => p.Frame!.owner == p.Id).Select(p => p.Id).DefaultIfEmpty(Unassigned).Min();
+            if (claimant != Unassigned)
+            {
+                worldOwner = claimant;
+                return;
+            }
             var successor = WorldPartners().Select(p => p.Id).Append(myId).Min();
             if (successor == myId) TakeOwnership();
             else worldOwner = successor;
@@ -275,9 +302,10 @@ public sealed partial class Plugin
         }
         var rival = WorldPartners().Where(p => p.Frame!.owner == p.Id && p.Id < myId).Select(p => p.Id).DefaultIfEmpty(Unassigned).Max();
         if (rival != Unassigned) { YieldOwnership(rival); return; }
+        if (requestedWorld.Length > 0 && heldTravel == null && pendingWorld == null && Time.unscaledTime > requestedUntil) requestedWorld = "";
         if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || WorldPartners().Any() || requestedWorld.Length > 0 || heldTravel != null) return;
         var depth = RunFloorHere();
-        var other = partners.Values.Select(p => p.Frame).Where(f => f != null && f.scene == Tableflip.Scene.Dungeon.ToString() && f.depth == depth && f.worldKey.Length > 0 && f.worldKey != key && OlderFloor(f))
+        var other = partners.Values.Select(p => p.Frame).Where(f => f != null && f.scene == Tableflip.Scene.Dungeon.ToString() && f.depth == depth && f.worldKey.Length > 0 && f.worldKey != key && !failedWorlds.Contains(f.worldKey) && OlderFloor(f))
             .OrderBy(f => f!.worldBorn).ThenBy(f => f!.owner).FirstOrDefault();
         if (other != null) RequestWorld(other);
     }
@@ -297,13 +325,15 @@ public sealed partial class Plugin
         monsterStates.Clear();
         attackingMirrors.Clear();
         nextMonsterId = monsters.Keys.DefaultIfEmpty(0).Max() + 1;
-        RealizeGround();
+        if (InTown) DiscardGround();
+        else RealizeGround();
         Logger.LogInfo("OWNERSHIP_TAKEN key=" + CurrentWorldKey());
     }
 
     private void YieldOwnership(int owner)
     {
-        SendGroundTo(owner);
+        if (InTown) ClearGroundTracking();
+        else SendGroundTo(owner);
         worldOwner = owner;
         ResetGround();
         foreach (var monster in monsters.Values.Where(m => m != null))

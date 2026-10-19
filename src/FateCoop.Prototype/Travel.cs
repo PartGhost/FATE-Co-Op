@@ -129,7 +129,8 @@ public sealed partial class Plugin
         pendingFollow = arriveNear = Unassigned;
         metHost = false;
         followAnswer = null;
-        heldTravel = null;
+        ReleaseHeldTravel();
         requestedWorld = "";
+        failedWorlds.Clear();
     }
 }

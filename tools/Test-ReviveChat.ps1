@@ -19,7 +19,6 @@ function Wait-Pair([scriptblock]$Condition, [string]$What, [int]$Seconds = 20) {
 $start = Wait-Pair { param($a, $b) $a.gameScene -eq 'Dungeon' -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $a.guestId -ne 0 -and $b.guestId -ne 0 } 'Shared floor' 90
 Send 'test-resume' 'a'
 Send 'test-resume' 'b'
-Send 'test-invincible on' 'a'
 
 Send 'test-chat hello from the host'
 Wait-Pair { param($a, $b) $b.chatReceived -gt $start.b.chatReceived -and $b.lastChat -like '*: hello from the host' } 'Host chat on the guest' | Out-Null

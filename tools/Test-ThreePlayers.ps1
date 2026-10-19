@@ -39,8 +39,6 @@ Wait-All { param($a, $b, $c) $a.lastChat -like '*: hello from the third player' 
 Write-Output 'Chat from the third player reached both others.'
 
 $floorKey = $hit[0].worldKey
-Send 'test-invincible on' 'b'
-Send 'test-invincible on' 'c'
 Send 'town' 'a'
 $handover = Wait-All { param($a, $b, $c) $a.gameScene -eq 'Town_Grove' -and !$a.transitioning -and $b.ownsWorld -and $c.worldOwner -eq $b.myId -and $b.worldKey -eq $floorKey -and $c.worldKey -eq $floorKey -and (Same $b $c) } 'Floor handover to the next player' 60
 Write-Output ('Host left; player ' + $handover[1].myId + ' took over the floor without a reload, and player ' + $handover[2].myId + ' follows them now.')

@@ -34,10 +34,19 @@ public sealed partial class Plugin
         assetHolder.gameObject.SetActive(false);
         Object.DontDestroyOnLoad(assetHolder.gameObject);
         var db = SingletonBehaviour<FateDB>.Instance;
-        foreach (var (name, step) in new (string, Action<FateDB>)[] { ("portal back face", AddPortalBackFace), ("dungeon props", PrepareDungeonProps), ("Sagestones", PrepareExperienceGems), ("merged run", PrepareRun) })
+        foreach (var (name, step, required) in new (string, Action<FateDB>, bool)[] { ("portal back face", AddPortalBackFace, false), ("dungeon props", PrepareDungeonProps, false), ("Sagestones", PrepareExperienceGems, true), ("merged run", PrepareRun, true) })
         {
             try { step(db); }
-            catch (Exception e) { Logger.LogError($"Couldn't set up the {name}: {e}"); }
+            catch (Exception e)
+            {
+                Logger.LogError($"Couldn't set up the {name}: {e}");
+                if (!required) continue;
+                Logger.LogError("FATE Co-Op is turning itself off so the game runs unmodded.");
+                harmony?.UnpatchSelf();
+                Active = null;
+                enabled = false;
+                return;
+            }
         }
     }
 

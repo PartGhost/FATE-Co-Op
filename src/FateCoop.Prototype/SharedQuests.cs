@@ -207,7 +207,7 @@ public sealed partial class Plugin
     private static void BeforeAcceptQuest(Quest quest, string questGiver)
     {
         var plugin = Active;
-        if (plugin == null || !plugin.MirroringQuests) return;
+        if (plugin == null || !plugin.MirroringQuests || quest.realmQuestData != null) return;
         var save = ToSave(quest);
         save.questgiver = questGiver;
         plugin.Send("quest-accept", JsonUtility.ToJson(save), HostId);
@@ -309,7 +309,17 @@ public sealed partial class Plugin
         var reward = JsonUtility.FromJson<QuestReward>(body);
         if (reward == null || reward.gold < 0 || reward.experience < 0 || reward.fame < 0) throw new InvalidOperationException("Invalid quest reward.");
         var player = Player.PlayerChar;
-        if (player == null || claimedQuests.Remove(reward.quest)) return;
+        if (player == null || transitioning)
+        {
+            deferred.Add(() => TakeQuestReward(body));
+            return;
+        }
+        if (MirroringQuests)
+        {
+            SideQuests[QuestRealm].RemoveAll(quest => quest != null && quest.Status == Quest.QuestStatus.Completed && QuestTitle(quest) == reward.quest);
+            RefreshQuestViews();
+        }
+        if (claimedQuests.Remove(reward.quest)) return;
         SingletonBehaviour<PlayerStatus>.Instance.AddGold((uint)reward.gold);
         player.AwardExperience(reward.experience, fromMaster: false);
         player.AwardFame((uint)reward.fame);

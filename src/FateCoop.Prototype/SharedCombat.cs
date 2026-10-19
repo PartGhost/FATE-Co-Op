@@ -353,7 +353,11 @@ public sealed partial class Plugin
 
     private void ForgetMonster(int id)
     {
-        if (monsters.TryGetValue(id, out var monster)) monsterIds.Remove(monster);
+        if (monsters.TryGetValue(id, out var monster))
+        {
+            monsterIds.Remove(monster);
+            shownEffects.Remove(monster);
+        }
         monsters.Remove(id);
         monsterStates.Remove(id);
         attackingMirrors.Remove(id);

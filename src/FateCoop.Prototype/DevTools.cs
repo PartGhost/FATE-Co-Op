@@ -331,6 +331,14 @@ public sealed partial class Plugin
                 var gear = SingletonBehaviour<FateDB>.Instance.AllItems.Where(item => !item.reserved && item.minimumDepth > 0).ToList();
                 SetStatus($"Items {gear.Count}, deepest minimum {gear.Max(item => item.minimumDepth)}; " + string.Join(", ", new[] { 25, 50, 75, 100, 150, 200, 300 }.Select(cap => $"<={cap}: {gear.Count(item => item.minimumDepth <= cap)}")) + "; deepest: " + string.Join(", ", gear.OrderByDescending(item => item.minimumDepth).Take(6).Select(item => item.displayName + "@" + item.minimumDepth)));
                 break;
+            case "test-rank-check":
+                var rankable = SingletonBehaviour<FateDB>.Instance.AllItems.First(data => data.ItemCategory == ItemCategory.Weapon && data.requirements != null && data.requirements.Count > 0 && data.maximumDepth > 12 && data.minimumDepth >= Fate.RankMod[Rank.Elite].levelOffset);
+                var before = string.Join(",", rankable.requirements.Select(r => r.attribute + "=" + r.value));
+                var ranked = new Item(rankable);
+                var plain = new Item(rankable);
+                ActiveLevel.ImproveItemToRank(ranked, Rank.Elite, 100);
+                SetStatus($"Rank check {rankable.displayName}: data {before} -> {string.Join(",", rankable.requirements.Select(r => r.attribute + "=" + r.value))}, plain copy {string.Join(",", plain.itemRequirements.Select(r => r.attribute + "=" + r.value))}, ranked {string.Join(",", ranked.itemRequirements.Select(r => r.attribute + "=" + r.value))}");
+                break;
             case "test-back":
                 Player.PlayerChar.GetComponentInChildren<CharacterCustomizationDefaults>(true).SetBack(parts[1]);
                 break;
@@ -839,7 +847,7 @@ public sealed partial class Plugin
             dungeonRealm = SingletonBehaviour<PlayerStatus>.InstanceExists() ? SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm.ToString() : "",
             effectiveDepth = LevelGenerator.effectiveLevelDepth,
             runSections = string.Join(",", RunSections.Select(section => section.realm + ":" + section.offset)), dlcs = ownedDlcs,
-            netStats = string.Join("\n", NetStatLines()), primaryLevel = player != null ? player.Level : 0, invincible = player != null && InvincibleRef(player), capeBend = player != null && player.GetComponentInChildren<CapeSwing>() is CapeSwing swing ? swing.Bend : -1f, dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
+            netStats = string.Join("\n", NetStatLines()), primaryLevel = player != null ? player.Level : 0, sceneDrops = Object.FindObjectsOfType<DroppedItem>().Length, invincible = player != null && InvincibleRef(player), capeBend = player != null && player.GetComponentInChildren<CapeSwing>() is CapeSwing swing ? swing.Bend : -1f, dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
             mirroringQuests = MirroringQuests, sharedQuestsReceived = sharedQuestsJson.Length > 0,
             giverQuests = string.Join(", ", Object.FindObjectsOfType<QuestGiver>().Where(giver => giver.Quest != null && giver.Quest.Status != Quest.QuestStatus.None).Select(giver => giver.CharacterName + ":" + giver.Quest.Status)),
             prompt = PromptUI.IsPromptActive ? PromptBodyRef(SingletonBehaviour<PromptUI>.Instance).text : "",
@@ -901,7 +909,7 @@ public sealed partial class Plugin
         public float dayPhase, sunIntensity, capeBend;
         public bool mirroringQuests, sharedQuestsReceived;
         public string giverQuests = "", netStats = "";
-        public int primaryLevel;
+        public int primaryLevel, sceneDrops;
         public string townNpcs = "", mainHand = "", localPet = "", fixtures = "", template = "", vitals = "", bagCheck = "", partnerIcon = "", partnerPetPortrait = "", buffs = "";
         public int replicaImpacts, skillPoints;
         public int statPoints, dungeonFloors, friendImpacts, localSummons, partnerSummons, mapOpenCells, bagFreeCells;
