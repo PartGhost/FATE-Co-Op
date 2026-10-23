@@ -70,7 +70,7 @@ internal sealed class SteamLink : IPeerLink
         lobby = new CSteamID(result.m_ulSteamIDLobby);
         if (ioFailure || result.m_EChatRoomEnterResponse != (uint)EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess) { failure = "Could not join the Steam lobby: " + (EChatRoomEnterResponse)result.m_EChatRoomEnterResponse; return; }
         var version = SteamMatchmaking.GetLobbyData(lobby, VersionKey);
-        if (version != Plugin.Compatibility) { failure = "The host runs " + version + ", this game runs " + Plugin.Compatibility + "."; return; }
+        if (version != Plugin.Compatibility) { failure = "The host runs a different FATE Co-Op version, game version or set of content mods (" + version + ", this game runs " + Plugin.Compatibility + ")."; return; }
         Add(Plugin.HostId, SteamMatchmaking.GetLobbyOwner(lobby));
         report("Joined " + SteamFriends.GetFriendPersonaName(users[Plugin.HostId]) + "'s lobby.");
     }

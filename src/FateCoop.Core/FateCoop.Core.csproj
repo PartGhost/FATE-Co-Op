@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../FateMod.props" />
+  <PropertyGroup>
+    <AssemblyName>FateCoop.Core</AssemblyName>
+  </PropertyGroup>
+</Project>

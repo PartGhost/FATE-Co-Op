@@ -18,7 +18,7 @@ public static class ModFiles
 {
     private const string AppId = "3030720", GameExe = "FateReawakened.exe", GameProcess = "FateReawakened";
     private const string LatestReleaseApi = "https://api.github.com/repos/PartGhost/FATE-Co-Op/releases/latest", ModAsset = "FateCoop-Mod.zip";
-    private const string LoaderFolder = "BepInEx", StagingFolder = "FateCoop-staging", Manifest = "installed.txt", PluginConfig = "local.fatecoop.prototype.cfg";
+    private const string LoaderFolder = "BepInEx", StagingFolder = "FateCoop-staging", Manifest = "installed.txt", PluginConfigs = "local.fatecoop.*.cfg";
     private const string SaveFile = "FateMainSave.save", OldSagestone = "\"baseName\":\"Item_\\w*Sagestone\"";
     private const int SaveLengthOffset = 8, SaveHeaderBytes = 12, OriginalGame = 0, GroveRealm = 0, QuestLogRows = 3;
     private static readonly string PluginFolder = Path.Combine(LoaderFolder, "plugins", "FateCoop");
@@ -179,8 +179,8 @@ public static class ModFiles
         var owned = InstalledFiles(game);
         Directory.Delete(Path.Combine(game, PluginFolder), true);
         var loader = Path.Combine(game, LoaderFolder);
-        var config = Path.Combine(loader, "config", PluginConfig);
-        if (File.Exists(config)) File.Delete(config);
+        var configs = Path.Combine(loader, "config");
+        if (Directory.Exists(configs)) foreach (var config in Directory.GetFiles(configs, PluginConfigs)) File.Delete(config);
         var ownLoader = owned.Any(file => file.StartsWith(LoaderFolder + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && !file.StartsWith(PluginFolder, StringComparison.OrdinalIgnoreCase));
         var otherMods = ModFolders.Select(folder => Path.Combine(loader, folder)).Where(Directory.Exists).Any(folder => Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).Any());
         if (!ownLoader || otherMods) return false;

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using HarmonyLib;
 using Tableflip;
 
-namespace FateCoop.Prototype;
+namespace FateCoop.GameFixes;
 
 public sealed partial class Plugin
 {

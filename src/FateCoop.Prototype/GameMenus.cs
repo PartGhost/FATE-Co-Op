@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Cleverous.ThatHurtModule;
+using FateCoop.Core;
 using HarmonyLib;
 using Steamworks;
 using Tableflip;
@@ -143,7 +144,7 @@ public sealed partial class Plugin
             goToButtons.Clear();
             hostPauseButton = CloneButton(options, "Host co-op", () => { resume.onClick.Invoke(); TryHostSteam(); });
             invitePauseButton = CloneButton(options, "Invite friend", () => { resume.onClick.Invoke(); (link as SteamLink)?.Invite(); });
-            friendList = CreateScrollList("FateCoop_FriendList", options.transform.parent, options.transform.parent.GetComponent<VerticalLayoutGroup>().spacing);
+            friendList = ScrollList.Create("FateCoop_FriendList", options.transform.parent, options.transform.parent.GetComponent<VerticalLayoutGroup>().spacing);
             friendList.gameObject.AddComponent<LayoutElement>();
             leavePauseButton = CloneButton(options, "Leave co-op", () => { resume.onClick.Invoke(); EndSession("You left co-op."); });
         }

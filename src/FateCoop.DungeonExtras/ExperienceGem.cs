@@ -1,11 +1,12 @@
 using System.Collections.Generic;
 using System.Linq;
+using FateCoop.Core;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
-namespace FateCoop.Prototype;
+namespace FateCoop.DungeonExtras;
 
 public sealed partial class Plugin
 {
@@ -49,12 +50,12 @@ public sealed partial class Plugin
         var gems = ExperienceGems.Select(gem =>
         {
             var source = db.AllItems.First(i => i.displayName == gem.Source);
-            var item = CopyItem(source, gem.Key, gem.Title);
+            var item = GameAssets.CopyItem(source, gem.Key, gem.Title);
             item.iconPath = $"ICONS/{GemIcon}.png:ICONS/{GemIcon}a.png";
             item.itemEffects = new List<EffectData> { new EffectData(source.itemEffects[0]) { name = ExperienceEffect, buffType = EffectType.None, value = gem.Percent, valueBonus = 0f, value2 = 0, value3 = 0 } };
             return item;
         }).ToList();
-        AddItems(db, gems);
+        GameAssets.AddItems(db, gems);
         var icon = db.spriteStash.First(s => s.name.ToLower() == GemIconSource);
         var trimmed = Recolor(icon.texture, icon.textureRect);
         var picture = new Texture2D((int)icon.rect.width, (int)icon.rect.height, TextureFormat.ARGB32, false);
@@ -64,7 +65,7 @@ public sealed partial class Plugin
         var sprite = Sprite.Create(picture, new Rect(0f, 0f, picture.width, picture.height), new Vector2(icon.pivot.x / icon.rect.width, icon.pivot.y / icon.rect.height), icon.pixelsPerUnit);
         sprite.name = GemIcon;
         db.spriteStash = db.spriteStash.Append(sprite).ToArray();
-        var model = CopyAsset(db.itemPrefabs.First(p => p.name.Replace("P_", "").ToLower() == GemIconSource), "P_" + GemIcon);
+        var model = GameAssets.Copy(db.itemPrefabs.First(p => p.name.Replace("P_", "").ToLower() == GemIconSource), "P_" + GemIcon);
         foreach (var renderer in model.GetComponentsInChildren<Renderer>(true))
             renderer.sharedMaterials = renderer.sharedMaterials.Select(material => new Material(material) { mainTexture = Recolor(material.mainTexture, new Rect(0f, 0f, material.mainTexture.width, material.mainTexture.height)) }).ToArray();
         db.itemPrefabs = db.itemPrefabs.Append(model).ToArray();

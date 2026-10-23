@@ -1,12 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection.Emit;
 using System.Linq;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
 
-namespace FateCoop.Prototype;
+namespace FateCoop.GameFixes;
 
 public sealed partial class Plugin
 {
@@ -15,7 +14,6 @@ public sealed partial class Plugin
     private static readonly AccessTools.FieldRef<FateChoice, uint> FateFameCostRef = AccessTools.FieldRefAccess<FateChoice, uint>("fameCost");
     private static readonly AccessTools.FieldRef<StatButton, Character> StatButtonCharacterRef = AccessTools.FieldRefAccess<StatButton, Character>("character");
     private static readonly System.Reflection.MethodInfo StatButtonEffectHandler = AccessTools.Method(typeof(StatButton), "OnAppliedEffect");
-    private static readonly System.Reflection.MethodInfo TownGetter = AccessTools.PropertyGetter(typeof(SingletonBehaviour<Town>), nameof(SingletonBehaviour<Town>.Instance));
     private static readonly AccessTools.FieldRef<ItemUI, List<ItemSlotUI>> CollidingSlotsRef = AccessTools.FieldRefAccess<ItemUI, List<ItemSlotUI>>("currentCollidingSlots");
     private static bool fateTransport;
 
@@ -31,20 +29,8 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(LevelGenerator), "ReplaceDungeon"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeFateReplace)) { priority = Priority.First });
         harmony.Patch(AccessTools.Method(typeof(FateChoice), "OnThirdChoice"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeFateTown)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterFateTown)));
         harmony.Patch(AccessTools.Method(typeof(StatButton), nameof(StatButton.Setup)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeStatButtonSetup)));
-        harmony.Patch(AccessTools.Method(typeof(QuestManager), nameof(QuestManager.AcceptQuest)), transpiler: new HarmonyMethod(typeof(Plugin), nameof(TownCheckWithoutCreating)));
         harmony.Patch(AccessTools.Method(typeof(ItemUI), nameof(ItemUI.OnEndDrag)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeGemDragEnd)));
-        harmony.Patch(AccessTools.Method(typeof(PortalManager), "OnAvatarSpawn"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePortalRespawn)));
     }
-
-    private static void BeforePortalRespawn(PortalManager __instance)
-    {
-        if (!SingletonBehaviour<Town>.InstanceExists()) __instance.RemoveCurrentActivePortal();
-    }
-
-    private static IEnumerable<CodeInstruction> TownCheckWithoutCreating(IEnumerable<CodeInstruction> instructions) =>
-        instructions.Select(instruction => instruction.Calls(TownGetter) ? new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(Plugin), nameof(ExistingTown))).MoveLabelsFrom(instruction) : instruction);
-
-    private static Town? ExistingTown() => SingletonBehaviour<Town>.InstanceExists() ? SingletonBehaviour<Town>.Instance : null;
 
     private static bool BeforeGemDragEnd(ItemUI __instance)
     {

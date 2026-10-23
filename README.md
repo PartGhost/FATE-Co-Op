@@ -59,7 +59,22 @@ Every install and update first backs up your saves to `Documents\FATE Co-Op save
 | F10 | Connection panel: each friend's ping and freezes on your side |
 | F11 | Hide the co-op overlays |
 
-`BepInEx\config\local.fatecoop.prototype.cfg` in the game folder has a few settings: lobby size, keyboard movement, camera turn speed, monster toughness and the length of a day in Grove (0 keeps it day).
+## The mods
+
+FATE Co-Op is a set of separate BepInEx mods, each in its own folder under `BepInEx\plugins\FateCoop`. Everything except Core can be turned off by removing its folder.
+
+| Mod | What it does | Settings (`BepInEx\config`) |
+|---|---|---|
+| Core | Shared pieces the others use. Always needed | |
+| FATE Co-Op | Online co-op, the merged run through the expansions and the extra Grove townsfolk | `local.fatecoop.prototype.cfg`: lobby size, monster toughness |
+| Controls | WASD movement, the turnable camera and upright minimap icons | `local.fatecoop.controls.cfg`: keyboard movement, camera turn speed |
+| Capes | Capes, cloaks, mantles and drapes that move | |
+| Day and Night | Grove's day and night | `local.fatecoop.daynight.cfg`: length of a day (0 keeps it day) |
+| Dungeon Extras | Crystals, gold carts, campfires and Sagestones | |
+| Quest Log | No limit on quests, with a scrolling quest log | |
+| Game Fixes | Fixes for bugs in the base game | |
+
+In co-op, everyone needs the same version, and the same Dungeon Extras and Quest Log setting (on or off), because those change what's in the shared world.
 
 ## Known limits
 
@@ -69,7 +84,7 @@ Every install and update first backs up your saves to `Documents\FATE Co-Op save
 
 ## Development
 
-- `src/FateCoop.Prototype`: the BepInEx plugin.
+- `src/FateCoop.Core`, `src/FateCoop.Prototype` (co-op), `src/FateCoop.Controls`, `src/FateCoop.Capes`, `src/FateCoop.DayNight`, `src/FateCoop.DungeonExtras`, `src/FateCoop.QuestLog`, `src/FateCoop.GameFixes`: one BepInEx plugin each. They share `src/FateMod.props` (references) and `src/SuiteVersion.cs` (one version for all).
 - `src/FateCoop.Installer`: the installer (WinForms on the .NET Framework built into Windows).
 - `src/SandboxPatcher`: patches the two local test copies of the game so their saves stay separate. Development only.
 - `tools/`: build, release (`Build-Release.ps1`) and multi-instance test scripts. `docs/prototype.md` has the version-by-version design notes.

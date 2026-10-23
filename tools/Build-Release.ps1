@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'Mods.ps1')
 & (Join-Path $PSScriptRoot 'Build-Prototype.ps1')
 $dotnet = Join-Path $PSScriptRoot 'dotnet\dotnet.exe'
 $installer = Join-Path $workspace 'src\FateCoop.Installer\FateCoop.Installer.csproj'
@@ -15,7 +16,11 @@ New-Item -ItemType Directory -Force -Path $plugin | Out-Null
 $bepinex = Join-Path $PSScriptRoot 'bepinex'
 Copy-Item -LiteralPath (Join-Path $bepinex 'winhttp.dll'), (Join-Path $bepinex 'doorstop_config.ini'), (Join-Path $bepinex '.doorstop_version') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $bepinex 'BepInEx\core') -Destination (Join-Path $stage 'BepInEx') -Recurse
-Copy-Item -LiteralPath (Join-Path $workspace 'src\FateCoop.Prototype\bin\Release\netstandard2.1\FateCoop.Prototype.dll'), (Join-Path $workspace 'LICENSE'), (Join-Path $workspace 'THIRD-PARTY-NOTICES.txt') -Destination $plugin
+Copy-Item -LiteralPath (Join-Path $workspace 'LICENSE'), (Join-Path $workspace 'THIRD-PARTY-NOTICES.txt') -Destination $plugin
+foreach ($mod in Get-ModNames) {
+    $folder = New-Item -ItemType Directory -Force -Path (Join-Path $plugin $mod)
+    Copy-Item -LiteralPath (Get-ModDll $mod) -Destination $folder.FullName
+}
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [IO.Compression.ZipFile]::Open($zip, 'Create')

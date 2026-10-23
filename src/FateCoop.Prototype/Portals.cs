@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Reflection;
 using Cleverous.VaultInventory;
+using FateCoop.Core;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
@@ -18,11 +19,17 @@ public sealed partial class Plugin
     private void InstallPortalHooks()
     {
         harmony!.Patch(AccessTools.Method(typeof(EnterPortal), "Interact"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePortalUse)));
+        harmony.Patch(AccessTools.Method(typeof(PortalManager), "OnAvatarSpawn"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforePortalRespawn)));
+    }
+
+    private static void BeforePortalRespawn(PortalManager __instance)
+    {
+        if (!SingletonBehaviour<Town>.InstanceExists()) __instance.RemoveCurrentActivePortal();
     }
 
     private void AddPortalBackFace(FateDB db)
     {
-        var portal = CopyAsset(db.portalPrefab);
+        var portal = GameAssets.Copy(db.portalPrefab);
         var front = portal.GetComponentInChildren<SkinnedMeshRenderer>(true);
         Object.Instantiate(front.gameObject, front.transform.parent).AddComponent<PortalBackFace>().Front = front;
         db.portalPrefab = portal;

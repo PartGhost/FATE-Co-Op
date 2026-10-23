@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using FateCoop.Core;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
@@ -22,6 +23,9 @@ public sealed partial class Plugin
     private static readonly List<(RealmData.RealmId realm, int offset, int lastStory)> RunSections = new List<(RealmData.RealmId, int, int)>();
     private static readonly HashSet<string> RunStoryKeys = new HashSet<string>();
     private static readonly AccessTools.FieldRef<MoveUpOrDownDungeon, int> StairsDepthRef = AccessTools.FieldRefAccess<MoveUpOrDownDungeon, int>("levelDepth");
+    private static readonly AccessTools.FieldRef<QuestUI, UnityEngine.UI.Button> QuestLogLeftRef = AccessTools.FieldRefAccess<QuestUI, UnityEngine.UI.Button>("realmLeftButton");
+    private static readonly AccessTools.FieldRef<QuestUI, UnityEngine.UI.Button> QuestLogRightRef = AccessTools.FieldRefAccess<QuestUI, UnityEngine.UI.Button>("realmRightButton");
+    private static bool buildingQuestLog;
 
     private void InstallRunHooks()
     {
@@ -40,6 +44,44 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(Character), nameof(Character.TweakToLevel)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeMonsterLevel)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterMonsterLevel)));
         harmony.Patch(AccessTools.Method(typeof(LevelGenerator), nameof(LevelGenerator.OutfitCharacter)), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeOutfit)), finalizer: new HarmonyMethod(typeof(Plugin), nameof(AfterOutfit)));
         harmony.Patch(AccessTools.Method(typeof(ActiveLevel), nameof(ActiveLevel.GetCurrentDungeonDepth)), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterCurrentDepth)));
+        harmony.Patch(AccessTools.Method(typeof(QuestUI), "BuildQuestUIForRealm"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeRunQuestLog)) { priority = Priority.First }, finalizer: new HarmonyMethod(typeof(Plugin), nameof(AfterRunQuestLog)));
+        harmony.Patch(AccessTools.Method(typeof(QuestManager), nameof(QuestManager.GetQuests), new[] { typeof(int) }), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeQuestLogSideQuests)));
+        harmony.Patch(AccessTools.Method(typeof(QuestUI), "OnEnable"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterQuestLogOpened)));
+        harmony.Patch(AccessTools.Method(typeof(QuestUI), "OnRealmLeftButton"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeQuestLogLeft)));
+        harmony.Patch(AccessTools.Method(typeof(QuestUI), "OnRealmRightButton"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeQuestLogRight)));
+    }
+
+    private static void BeforeRunQuestLog() => buildingQuestLog = true;
+
+    private static void AfterRunQuestLog() => buildingQuestLog = false;
+
+    private static List<RealmData.RealmId> ReachedRunRealms() =>
+        RunSections.Select(section => section.realm).Where(realm => realm == RunSections[0].realm || SaveData.CurrentSaveData.GetRealmSave(realm).maxDepthReached > 0).ToList();
+
+    private static void BeforeQuestLogSideQuests(ref int realmId)
+    {
+        if (buildingQuestLog && InRun((RealmData.RealmId)realmId)) realmId = (int)RunSections[0].realm;
+    }
+
+    private static void AfterQuestLogOpened(QuestUI __instance)
+    {
+        if (!InRun(RunSections[0].realm)) return;
+        var paged = ReachedRunRealms().Count > 1;
+        QuestLogLeftRef(__instance).gameObject.SetActive(paged);
+        QuestLogRightRef(__instance).gameObject.SetActive(paged);
+    }
+
+    private static bool BeforeQuestLogLeft(QuestUI __instance) => PageQuestLog(__instance, -1);
+
+    private static bool BeforeQuestLogRight(QuestUI __instance) => PageQuestLog(__instance, 1);
+
+    private static bool PageQuestLog(QuestUI log, int step)
+    {
+        if (!InRun(QuestLogRealmRef(log))) return true;
+        var realms = ReachedRunRealms();
+        var next = (realms.IndexOf(QuestLogRealmRef(log)) + step + realms.Count) % realms.Count;
+        BuildQuestLogMethod.Invoke(log, new object[] { realms[next] });
+        return false;
     }
 
     private static bool outfittingMonster;

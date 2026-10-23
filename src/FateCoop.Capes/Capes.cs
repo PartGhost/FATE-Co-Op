@@ -5,7 +5,7 @@ using HarmonyLib;
 using Tableflip;
 using UnityEngine;
 
-namespace FateCoop.Prototype;
+namespace FateCoop.Capes;
 
 public sealed partial class Plugin
 {

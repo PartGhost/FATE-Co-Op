@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
+using FateCoop.Core;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
@@ -16,6 +18,9 @@ public sealed partial class Plugin
     private static readonly FieldInfo SideQuestsField = AccessTools.Field(typeof(QuestManager), "allSideQuests");
     private static readonly MethodInfo TargetCountSetter = AccessTools.PropertySetter(typeof(Quest), "TargetCount");
     private static readonly AccessTools.FieldRef<LevelGenerator, List<DroppedItem>> DroppedItemsRef = AccessTools.FieldRefAccess<LevelGenerator, List<DroppedItem>>("droppedItems");
+    private static readonly AccessTools.FieldRef<QuestUI, RealmData.RealmId> QuestLogRealmRef = AccessTools.FieldRefAccess<QuestUI, RealmData.RealmId>("activeRealm");
+    private static readonly MethodInfo BuildQuestLogMethod = AccessTools.Method(typeof(QuestUI), "BuildQuestUIForRealm");
+    private static readonly MethodInfo TownGetter = AccessTools.PropertyGetter(typeof(SingletonBehaviour<Town>), nameof(SingletonBehaviour<Town>.Instance));
     private string sentQuests = "", sharedQuestsJson = "", reportedProgress = "";
     private List<Quest>? ownSideQuests;
     private float nextQuestSync;
@@ -55,11 +60,16 @@ public sealed partial class Plugin
         harmony.Patch(AccessTools.Method(typeof(QuestManager), "LoadSave"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterQuestLoad)));
         harmony.Patch(AccessTools.Method(typeof(Quest), "GenerateObjective"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterQuestObjective)));
         harmony.Patch(AccessTools.Method(typeof(QuestManager), "FlushSave"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeQuestSave)), finalizer: new HarmonyMethod(typeof(Plugin), nameof(AfterQuestSave)));
-        harmony.Patch(AccessTools.Method(typeof(QuestManager), "AcceptQuest"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeAcceptQuest)));
+        harmony.Patch(AccessTools.Method(typeof(QuestManager), "AcceptQuest"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeAcceptQuest)), transpiler: new HarmonyMethod(typeof(Plugin), nameof(TownCheckWithoutCreating)));
         harmony.Patch(AccessTools.Method(typeof(QuestManager), "CancelQuest"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeCancelQuest)));
         harmony.Patch(AccessTools.Method(typeof(QuestManager), "ClaimRewards"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeClaimAtGiver)));
         harmony.Patch(AccessTools.Method(typeof(PlayerStatus), "RemoveQuestItem"), prefix: new HarmonyMethod(typeof(Plugin), nameof(BeforeRemoveQuestItem)));
     }
+
+    private static IEnumerable<CodeInstruction> TownCheckWithoutCreating(IEnumerable<CodeInstruction> instructions) =>
+        instructions.Select(instruction => instruction.Calls(TownGetter) ? new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(Plugin), nameof(ExistingTown))).MoveLabelsFrom(instruction) : instruction);
+
+    private static Town? ExistingTown() => SingletonBehaviour<Town>.InstanceExists() ? SingletonBehaviour<Town>.Instance : null;
 
     private static string QuestTitle(Quest quest) => string.Format(quest.QuestName, quest.QuestGiverDisplayName);
 

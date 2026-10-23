@@ -10,7 +10,7 @@ foreach ($assembly in $manifest.assemblies) {
     $actual = Get-FileHash -LiteralPath (Join-Path $game ('FateReawakened_Data\Managed\' + $assembly.assembly))
     if ($actual.Hash -ne $assembly.sha256) { throw ('Sandbox assembly hash mismatch: ' + $assembly.assembly) }
 }
-if (!(Test-Path -LiteralPath (Join-Path $game 'BepInEx\plugins\FateCoop.Prototype.dll'))) { throw 'Build the prototype first.' }
+if (!(Test-Path -LiteralPath (Join-Path $game 'BepInEx\plugins\FateCoop\FateCoop.Prototype\FateCoop.Prototype.dll'))) { throw 'Build the prototype first.' }
 $existing = Get-Process -Name FateReawakened -ErrorAction SilentlyContinue
 if ($existing | Where-Object { $_.Path -eq (Join-Path $game 'FateReawakened.exe') -or !$_.Path -or !$_.Path.StartsWith($workspace + '\', [StringComparison]::OrdinalIgnoreCase) }) { throw 'This instance or a non-sandbox FATE process is already running.' }
 $runtime = Get-RuntimePath $Instance

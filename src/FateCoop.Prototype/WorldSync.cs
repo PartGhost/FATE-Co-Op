@@ -14,7 +14,7 @@ public sealed partial class Plugin
 {
     private const string TownKey = "GroveTown";
     private const float JoinWait = 5f, ArrivalWait = 20f, ArrivalSpacing = 1.5f;
-    private readonly string sessionId = Guid.NewGuid().ToString("N");
+    private readonly string sessionId = System.Guid.NewGuid().ToString("N");
     private string layoutHash = "", worldKey = "", requestedWorld = "";
     private int worldOwner = HostId, joiningOwner, arriveNear = Unassigned, travelDepth, heldDepth;
     private WorldSnapshot? pendingWorld, joiningWorld;

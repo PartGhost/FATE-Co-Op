@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Cleverous.Prodigy;
+using FateCoop.Core;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
@@ -16,6 +17,7 @@ public sealed partial class Plugin
     private static readonly Dictionary<string, bool> SharedEffectNames = new Dictionary<string, bool>();
     private static readonly MethodInfo AddParticlesMethod = AccessTools.Method(typeof(Character), "AddPSEffect");
     private static readonly MethodInfo RemoveParticlesMethod = AccessTools.Method(typeof(Character), "RemovePSEffect");
+    private static readonly AccessTools.FieldRef<Character, Dictionary<ActivationType, List<AppliedEffect>>> EffectsRef = AccessTools.FieldRefAccess<Character, Dictionary<ActivationType, List<AppliedEffect>>>("effects");
     private static readonly MethodInfo CastingVfxMethod = AccessTools.Method(typeof(Character), "CastingVFX");
     private static readonly MethodInfo ArrowFadeMethod = AccessTools.Method(typeof(Character), "ArrowTrailFadeOut");
     private static readonly MethodInfo HurtPopupMethod = AccessTools.Method(typeof(ThatHurtTrigger), "OnHurt");

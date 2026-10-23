@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../FateMod.props" />
+  <PropertyGroup>
+    <AssemblyName>FateCoop.DayNight</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FateCoop.Core/FateCoop.Core.csproj"><Private>false</Private></ProjectReference>
+  </ItemGroup>
+</Project>

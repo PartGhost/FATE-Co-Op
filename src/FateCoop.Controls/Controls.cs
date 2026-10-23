@@ -7,7 +7,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.InputSystem;
 
-namespace FateCoop.Prototype;
+namespace FateCoop.Controls;
 
 public sealed partial class Plugin
 {
@@ -51,7 +51,7 @@ public sealed partial class Plugin
         return false;
     }
 
-    private bool MovementBlocked => InputBlocker.AnyBlockingUiMenuIsOpen || InventoryUI.IsDraggingItem || downed;
+    private bool MovementBlocked => InputBlocker.AnyBlockingUiMenuIsOpen || InventoryUI.IsDraggingItem || (Player.PlayerChar != null && Player.PlayerChar.MyVitals.IsDead);
 
     private static void BeforeInputModeCheck(InputBroker __instance, out InputBroker.InputBehavior __state) => __state = __instance.LocalInputBehavior;
 

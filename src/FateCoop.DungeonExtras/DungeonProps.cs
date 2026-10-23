@@ -2,13 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Cleverous.VaultInventory;
+using FateCoop.Core;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
 using Object = UnityEngine.Object;
 using Random = UnityEngine.Random;
 
-namespace FateCoop.Prototype;
+namespace FateCoop.DungeonExtras;
 
 public sealed partial class Plugin
 {
@@ -68,19 +69,19 @@ public sealed partial class Plugin
                 continue;
             }
             var suffix = prefab.name.Replace("P_", "").Replace("_", "");
-            var item = CopyItem(db.AllItems.First(i => i.itemType == (fixture.Kind == FixtureKind.Crystal ? ItemType.Container : ItemType.ChestMedium)), "Item_" + suffix, fixture.Title);
+            var item = GameAssets.CopyItem(db.AllItems.First(i => i.itemType == (fixture.Kind == FixtureKind.Crystal ? ItemType.Container : ItemType.ChestMedium)), "Item_" + suffix, fixture.Title);
             item.reserved = true;
             items.Add(item);
             var container = fixture.Kind == FixtureKind.Crystal ? MakeCrystal(prefab, breakable, "P_" + suffix) : MakeGoldCart(prefab, chest, "P_" + suffix);
             FixturesByProp[prefab.name] = new Fixture { Kind = fixture.Kind, Item = item, Container = container };
         }
-        AddItems(db, items);
+        GameAssets.AddItems(db, items);
         db.containerPrefabs = db.containerPrefabs.Concat(FixturesByProp.Values.Select(f => f.Container)).ToArray();
     }
 
     private GameObject MakeCrystal(GameObject prop, GameObject breakable, string name)
     {
-        var crystal = CopyAsset(prop, name);
+        var crystal = GameAssets.Copy(prop, name);
         crystal.layer = breakable.layer;
         var template = breakable.GetComponent<ContainerDestroyable>();
         var material = crystal.GetComponent<MeshRenderer>().sharedMaterial;
@@ -96,7 +97,7 @@ public sealed partial class Plugin
 
     private GameObject Shards(GameObject source, Material material, float size)
     {
-        var shards = CopyAsset(source);
+        var shards = GameAssets.Copy(source);
         shards.transform.localScale *= size;
         foreach (var renderer in shards.GetComponentsInChildren<Renderer>(true).Where(renderer => !(renderer is ParticleSystemRenderer))) renderer.sharedMaterials = renderer.sharedMaterials.Select(_ => material).ToArray();
         return shards;
@@ -104,7 +105,7 @@ public sealed partial class Plugin
 
     private GameObject MakeGoldCart(GameObject prop, GameObject chest, string name)
     {
-        var cart = CopyAsset(prop, name);
+        var cart = GameAssets.Copy(prop, name);
         cart.layer = chest.layer;
         cart.AddComponent<ContainerInteractable>();
         AddTitle<ContainerTooltip>(cart, chest);
@@ -113,11 +114,11 @@ public sealed partial class Plugin
 
     private GameObject MakeCampfire(GameObject prop, FountainInteractable wellness, string title)
     {
-        var campfire = CopyAsset(prop);
+        var campfire = GameAssets.Copy(prop);
         campfire.layer = wellness.gameObject.layer;
         var fountain = campfire.AddComponent<FountainInteractable>();
         FountainNameRef(fountain) = "Item_" + prop.name.Replace("P_", "");
-        ModText[FountainNameRef(fountain)] = title;
+        GameAssets.SetText(FountainNameRef(fountain), title);
         Campfires.Add(FountainNameRef(fountain));
         FountainEffectsRef(fountain) = FountainEffectsRef(wellness).Where(e => CampfireEffects.Contains(e.name))
             .Select(e => new EffectData(e) { value = CampfireRestorePercent, valueBonus = 0f }).ToArray();

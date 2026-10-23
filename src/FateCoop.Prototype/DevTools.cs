@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using Cleverous.VaultInventory;
+using FateCoop.Core;
 using HarmonyLib;
 using Steamworks;
 using Tableflip;
@@ -54,19 +55,6 @@ public sealed partial class Plugin
     private bool testInvincible;
     private Monster? aggroMonster;
 
-    private IEnumerator HoldMove(Vector2 input, float seconds)
-    {
-        testMove = input;
-        yield return new WaitForSecondsRealtime(seconds);
-        testMove = Vector2.zero;
-    }
-
-    private IEnumerator StopTurnNextFrame()
-    {
-        yield return null;
-        testTurn = 0f;
-    }
-
     private IEnumerator MeasureFrames(float seconds)
     {
         var frames = new List<float>();
@@ -100,10 +88,10 @@ public sealed partial class Plugin
         if (Time.unscaledTime >= nextPoll)
         {
             nextPoll = Time.unscaledTime + 0.2f;
-            foreach (var file in Directory.GetFiles(Path.Combine(controlRoot, "commands"), "*.cmd").OrderBy(p => p, StringComparer.Ordinal))
+            foreach (var file in Directory.GetFiles(Path.Combine(TestChannel.Root, "commands"), "*.cmd").OrderBy(p => p, StringComparer.Ordinal))
             {
                 var command = File.ReadAllText(file).Trim();
-                File.Move(file, Path.Combine(controlRoot, "processed", Path.GetFileName(file)));
+                File.Move(file, Path.Combine(TestChannel.Root, "processed", Path.GetFileName(file)));
                 try { Execute(command); }
                 catch (Exception e) { SetStatus("Command failed: " + e.Message); Logger.LogError(e); }
             }
@@ -255,15 +243,6 @@ public sealed partial class Plugin
                 break;
             case "test-coop-menu": ShowCoopMenu(parts.Length < 2 || parts[1] != "off"); break;
             case "test-pause": SingletonBehaviour<PauseUI>.Instance.OnMenuButton(); break;
-            case "test-move":
-                if (parts.Length != 4) throw new ArgumentException("test-move <x> <y> <seconds>");
-                StartCoroutine(HoldMove(new Vector2(float.Parse(parts[1], CultureInfo.InvariantCulture), float.Parse(parts[2], CultureInfo.InvariantCulture)), float.Parse(parts[3], CultureInfo.InvariantCulture)));
-                break;
-            case "test-turn":
-                if (parts.Length != 2) throw new ArgumentException("test-turn <degrees>");
-                testTurn = float.Parse(parts[1], CultureInfo.InvariantCulture);
-                StartCoroutine(StopTurnNextFrame());
-                break;
             case "test-calm":
                 if (aggroMonster != null && !aggroMonster.MyVitals.IsDead)
                 {
@@ -360,7 +339,7 @@ public sealed partial class Plugin
                 break;
             case "test-map-icons":
                 var mapLayers = new HashSet<int>(Object.FindObjectsOfType<MiniMapIconUI>(true).Select(icon => icon.gameObject.layer));
-                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), Object.FindObjectsOfType<Renderer>(true).Where(r => mapLayers.Contains(r.gameObject.layer))
+                File.WriteAllLines(Path.Combine(TestChannel.Root, "dump.txt"), Object.FindObjectsOfType<Renderer>(true).Where(r => mapLayers.Contains(r.gameObject.layer))
                     .Select(r => $"{PathOf(r.transform)} | {r.GetType().Name} | layer {LayerMask.LayerToName(r.gameObject.layer)} | icon {(r.GetComponentInParent<MiniMapIconUI>() is MiniMapIconUI ui ? (ui.fixedRotation ? "fixed" : "free") : "none")} | rot {r.transform.eulerAngles} | active {r.gameObject.activeInHierarchy}"));
                 SetStatus("Map icons dumped");
                 break;
@@ -369,9 +348,6 @@ public sealed partial class Plugin
                 break;
             case "test-portals":
                 SetStatus("Portals: " + string.Join("; ", Object.FindObjectsOfType<EnterPortal>().Select(portal => $"{portal.name} {portal.portalType} {portal.transform.position} active {portal.gameObject.activeInHierarchy}")));
-                break;
-            case "test-back":
-                Player.PlayerChar.GetComponentInChildren<CharacterCustomizationDefaults>(true).SetBack(parts[1]);
                 break;
             case "test-zoom":
                 AccessTools.Field(typeof(Cleverous.Prodigy.ProdigyCamera), "targetZoomAmount").SetValue(Cleverous.Prodigy.ProdigyCamera.Instance, new Vector3(0f, 0f, -float.Parse(parts[1], CultureInfo.InvariantCulture)));
@@ -392,11 +368,11 @@ public sealed partial class Plugin
                 for (var z = area[3]; z >= area[1]; z -= 1f)
                     rows.Add($"{z,6:0} " + string.Concat(Enumerable.Range(0, (int)(area[2] - area[0]) + 1).Select(step => Physics.Raycast(new Vector3(area[0] + step, 30f, z), Vector3.down, out var ground, 60f) && NavMesh.SamplePosition(ground.point, out _, 0.4f, NavMesh.AllAreas) ? '.' : '#')));
                 rows.Add("       x from " + area[0] + " to " + area[2]);
-                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), rows);
+                File.WriteAllLines(Path.Combine(TestChannel.Root, "dump.txt"), rows);
                 break;
             case "test-lighting":
                 var renderers = Object.FindObjectsOfType<Renderer>();
-                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), new[]
+                File.WriteAllLines(Path.Combine(TestChannel.Root, "dump.txt"), new[]
                 {
                     $"LIGHTMAPS {LightmapSettings.lightmaps.Length} | renderers using them {renderers.Count(r => r.lightmapIndex >= 0 && r.lightmapIndex < 65534)}/{renderers.Length}",
                     $"AMBIENT {RenderSettings.ambientMode} sky={RenderSettings.ambientSkyColor} equator={RenderSettings.ambientEquatorColor} ground={RenderSettings.ambientGroundColor} flat={RenderSettings.ambientLight} intensity={RenderSettings.ambientIntensity}",
@@ -405,7 +381,7 @@ public sealed partial class Plugin
                     $"LIGHT {PathOf(light.transform)} | {light.type} | on={light.isActiveAndEnabled} | baked={light.bakingOutput.lightmapBakeType} isBaked={light.bakingOutput.isBaked} | intensity={light.intensity} range={light.range} color={light.color} | shadows={light.shadows} | scene={light.gameObject.scene.name}")));
                 break;
             case "test-materials":
-                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), Object.FindObjectsOfType<Renderer>().Where(r => PathOf(r.transform).IndexOf(parts[1], StringComparison.OrdinalIgnoreCase) >= 0).Take(10).SelectMany(r => new[] { "RENDERER " + PathOf(r.transform) }
+                File.WriteAllLines(Path.Combine(TestChannel.Root, "dump.txt"), Object.FindObjectsOfType<Renderer>().Where(r => PathOf(r.transform).IndexOf(parts[1], StringComparison.OrdinalIgnoreCase) >= 0).Take(10).SelectMany(r => new[] { "RENDERER " + PathOf(r.transform) }
                     .Concat(r.sharedMaterials.Where(m => m != null).SelectMany(m => new[] { $"  MATERIAL {m.name} | shader={m.shader.name} | queue={m.renderQueue} | keywords={string.Join(",", m.shaderKeywords)}" }
                         .Concat(Enumerable.Range(0, m.shader.GetPropertyCount()).Select(i => (name: m.shader.GetPropertyName(i), type: m.shader.GetPropertyType(i))).Select(p => p.type switch
                         {
@@ -414,9 +390,6 @@ public sealed partial class Plugin
                             UnityEngine.Rendering.ShaderPropertyType.Vector => $"    {p.name} = {m.GetVector(p.name)}",
                             _ => $"    {p.name} : {p.type} {(m.GetTexture(p.name) != null ? m.GetTexture(p.name).name : "-")}"
                         }))))));
-                break;
-            case "test-day":
-                dayOffset = ((float.Parse(parts[1], CultureInfo.InvariantCulture) - Time.realtimeSinceStartup / dayLengthSeconds) % 1f + 1f) % 1f;
                 break;
             case "test-quest-depth":
                 var groveSave = SaveData.CurrentSaveData.GetRealmSave(RealmData.RealmId.Grove);
@@ -467,10 +440,6 @@ public sealed partial class Plugin
                 break;
             case "test-tab":
                 ((UITabs)AccessTools.Field(typeof(PlayerUI), "uiTabs").GetValue(SimpleSingletonBehaviour<PlayerUI>.Instance)).SetTab((UITabs.TabType)Enum.Parse(typeof(UITabs.TabType), parts[1]));
-                break;
-            case "test-quest-scroll":
-                var questLog = Object.FindObjectOfType<QuestUI>();
-                UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(SideQuestRowsRef(questLog).Last(row => row.gameObject.activeSelf).questButton.gameObject);
                 break;
             case "test-goto-scroll":
                 UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(goToButtons.Last(button => button.gameObject.activeSelf).gameObject);
@@ -558,19 +527,8 @@ public sealed partial class Plugin
                 break;
             case "test-items":
                 var itemType = (ItemType)Enum.Parse(typeof(ItemType), parts[1]);
-                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), SingletonBehaviour<FateDB>.Instance.AllItems.Where(i => i.itemType == itemType).Select(i =>
+                File.WriteAllLines(Path.Combine(TestChannel.Root, "dump.txt"), SingletonBehaviour<FateDB>.Instance.AllItems.Where(i => i.itemType == itemType).Select(i =>
                     $"{i.displayName} | ref={i.refId} | icon={i.iconPath} ({i.IconName}) | model={i.modelPath} | rarity={i.rarity} depth={i.minimumDepth}-{i.maximumDepth} | value={i.value} | expansion={i.expansion} | effects=[{string.Join("; ", i.itemEffects.Select(e => $"{e.buffType} {e.value}/{e.value2}/{e.value3} dur={e.duration} {e.activationType} {e.target}"))}] | desc={i.description}"));
-                break;
-            case "test-fixture":
-                var visitor = Player.PlayerChar;
-                var kind = (FixtureKind)Enum.Parse(typeof(FixtureKind), parts[1]);
-                var nearest = FixtureObjects().Where(f => f.kind == kind && f.usable).OrderBy(f => (f.obj.transform.position - visitor.transform.position).sqrMagnitude).FirstOrDefault().obj
-                    ?? throw new InvalidOperationException("No usable " + kind + " here.");
-                NavMesh.SamplePosition(nearest.transform.position, out var nearFixture, 4f, NavMesh.AllAreas);
-                visitor.GetComponent<NavMeshAgent>().Warp(nearFixture.position);
-                if (parts.Length > 2) break;
-                if (nearest is ContainerDestroyable crystalToBreak) crystalToBreak.Destroyed();
-                else ((Cleverous.VaultInventory.InteractableSceneObject)nearest).Interact(visitor);
                 break;
             case "test-vitals":
                 var share = float.Parse(parts[1], CultureInfo.InvariantCulture) / 100f;
@@ -595,7 +553,7 @@ public sealed partial class Plugin
                 if (!receiver.AddItemToInventory(new Item(SingletonBehaviour<FateDB>.Instance.AllItems.First(i => i.displayName == string.Join(" ", parts.Skip(1)))), AddItemReason.Loot)) throw new InvalidOperationException("No room for " + parts[1]);
                 break;
             case "test-bag":
-                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), Player.PlayerChar.inventory.SelectMany(i => new[] { i }.Concat(i.sockedtedItems ?? Enumerable.Empty<Item>()))
+                File.WriteAllLines(Path.Combine(TestChannel.Root, "dump.txt"), Player.PlayerChar.inventory.SelectMany(i => new[] { i }.Concat(i.sockedtedItems ?? Enumerable.Empty<Item>()))
                     .Select(i => $"{i.itemBaseName} | name={i.itemName} | display={i.itemData?.displayName} | effects=[{string.Join("; ", i.itemData?.itemEffects.Select(e => e.buffType + " " + e.value) ?? Enumerable.Empty<string>())}]"));
                 break;
             case "test-socket":
@@ -604,19 +562,6 @@ public sealed partial class Plugin
                 socketed.SetIdentified(true);
                 socketed.sockets = Math.Max(socketed.sockets, (socketed.sockedtedItems?.Count ?? 0) + 1);
                 socketed.SocketItem(new Item(SingletonBehaviour<FateDB>.Instance.AllItems.First(i => i.displayName == parts[1])));
-                break;
-            case "test-gem-drag":
-                var dragger = Player.PlayerChar;
-                var armed = dragger.inventory.First(i => i.equipped && i.IsInMainHand);
-                armed.SetIdentified(true);
-                armed.sockets = Math.Max(armed.sockets, (armed.sockedtedItems?.Count ?? 0) + 1);
-                var dragGem = dragger.inventory.Last(i => i.itemType == ItemType.Gem);
-                var gemUi = Object.FindObjectsOfType<ItemUI>().First(ui => ui.currentItem == dragGem);
-                CollidingSlotsRef(gemUi).Clear();
-                CollidingSlotsRef(gemUi).Add(Object.FindObjectsOfType<EquipmentSlotUI>().First(slot => !slot.IsOpen && slot.GetCurrentItemUI.currentItem == armed));
-                InventoryUI.draggedItemUI = gemUi;
-                gemUi.OnEndDrag(null);
-                SetStatus($"Gem drag: socketed {armed.sockedtedItems?.Contains(dragGem)}, in bag {dragger.inventory.Contains(dragGem)}, on ground {Object.FindObjectsOfType<DroppedItem>().Count(d => d.Item == dragGem)}");
                 break;
             case "test-perf":
                 StartCoroutine(MeasureFrames(float.Parse(parts[1], CultureInfo.InvariantCulture)));
@@ -649,18 +594,15 @@ public sealed partial class Plugin
                 break;
             case "test-pets":
                 var db = SingletonBehaviour<FateDB>.Instance;
-                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), db.PetProfilePictures.Select(p => $"PICTURE {p.family} | {(p.regular != null ? p.regular.name : "-")} | {(p.shadowed != null ? p.shadowed.name : "-")}")
+                File.WriteAllLines(Path.Combine(TestChannel.Root, "dump.txt"), db.PetProfilePictures.Select(p => $"PICTURE {p.family} | {(p.regular != null ? p.regular.name : "-")} | {(p.shadowed != null ? p.shadowed.name : "-")}")
                     .Concat(db.allMonsters.Where(m => m != null && m.displayName.IndexOf(parts.Length > 1 ? parts[1] : "", StringComparison.OrdinalIgnoreCase) >= 0).Select(m => $"MONSTER {m.displayName} | family={m.family} | prefab={(m.modelPrefab != null ? m.modelPrefab.name : "-")}")));
                 break;
             case "test-template":
                 forcedTemplate = parts[1] == "off" ? null : SingletonBehaviour<FateDB>.Instance.allTemplates.First(t => t != null && t.templateName == parts[1]);
                 break;
-            case "test-templates":
-                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), SingletonBehaviour<FateDB>.Instance.allTemplates.Where(t => t != null).Select(t => $"{t.realmId} | {t.templateName} | {string.Join(", ", t.props.Where(p => p != null && p.modelPrefab != null).Select(p => p.modelPrefab.name).Where(n => FixturesByProp.ContainsKey(n) || n.Contains("Campfire")).Distinct())}"));
-                break;
             case "test-realms":
                 var realmDb = SingletonBehaviour<FateDB>.Instance;
-                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"),
+                File.WriteAllLines(Path.Combine(TestChannel.Root, "dump.txt"),
                     realmDb.realmQuests.Where(q => q != null).OrderBy(q => q.targetRealm).ThenBy(q => q.id)
                         .Select(q => $"QUEST {q.targetGame} | {q.targetRealm} | id={q.id} | depth={q.depth} | minLevel={q.minLevel} | block={q.block} | required={q.required} | hidden={q.hidden} | {q.title} | type={q.questType} | monster={q.monster} | target={q.target} | item={q.item} | race={q.raceReq} | needs=[{string.Join(",", q.keysRequired ?? new List<string>())}] | gives=[{string.Join(",", q.keysToProgress ?? new List<string>())}] | flag={q.progressFlag}")
                     .Concat(realmDb.allMonsters.Where(m => m != null && m.alignment == Alignment.Evil && !m.reserved).OrderBy(m => m.minimumDepth)
@@ -673,7 +615,7 @@ public sealed partial class Plugin
                 break;
             case "test-props":
                 var templates = Resources.FindObjectsOfTypeAll<TemplateData>();
-                File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), Resources.FindObjectsOfTypeAll<PropData>().Where(p => p.modelPrefab != null).OrderBy(p => p.modelPrefab.name).Select(p =>
+                File.WriteAllLines(Path.Combine(TestChannel.Root, "dump.txt"), Resources.FindObjectsOfTypeAll<PropData>().Where(p => p.modelPrefab != null).OrderBy(p => p.modelPrefab.name).Select(p =>
                     $"{p.propName} | {p.modelPrefab.name} | [{string.Join(", ", p.modelPrefab.GetComponentsInChildren<Component>(true).Where(c => c != null && !(c is Transform)).Select(c => c.GetType().Name).Distinct())}] | {string.Join(", ", templates.Where(t => t.props != null && t.props.Contains(p)).Select(t => t.templateName))}"));
                 break;
             case "test-fake-friends":
@@ -688,7 +630,10 @@ public sealed partial class Plugin
                 }
                 break;
             case "quit": Application.Quit(); break;
-            default: throw new ArgumentException("Unknown prototype command: " + parts[0]);
+            default:
+                if (!TestChannel.Commands.TryGetValue(parts[0], out var packCommand)) throw new ArgumentException("Unknown prototype command: " + parts[0]);
+                packCommand(parts);
+                break;
         }
     }
 
@@ -724,10 +669,6 @@ public sealed partial class Plugin
             .Concat(staticRefs).GroupBy(s => s).Select(g => g.Count() > 1 ? $"{g.Key} x{g.Count()}" : g.Key));
     }
 
-    private static IEnumerable<(Component obj, FixtureKind kind, bool usable)> FixtureObjects() =>
-        Object.FindObjectsOfType<ContainerDestroyable>().Where(c => FixtureOf(c.Item) != null).Select(c => ((Component)c, FixtureKind.Crystal, !c.IsDestroyed))
-            .Concat(Object.FindObjectsOfType<ContainerInteractable>().Where(c => FixtureOf(c.Item) != null).Select(c => ((Component)c, FixtureKind.GoldCart, !c.IsOpen)))
-            .Concat(Object.FindObjectsOfType<FountainInteractable>().Where(f => Campfires.Contains(FountainNameRef(f))).Select(f => ((Component)f, FixtureKind.Campfire, !f.IsUsed)));
 
     private void Dump(string filter)
     {
@@ -738,7 +679,7 @@ public sealed partial class Plugin
             lines.Add((match.scene.IsValid() ? "SCENE " + match.scene.name : "ASSET") + " " + PathOf(match.transform));
             DumpObject(match.transform, lines, 1, 3);
         }
-        File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), lines);
+        File.WriteAllLines(Path.Combine(TestChannel.Root, "dump.txt"), lines);
         SetStatus($"Dumped {matches.Count} objects matching {filter}");
     }
 
@@ -781,7 +722,7 @@ public sealed partial class Plugin
                 NpcVoiceLines voice => $"VOICE {voice.thisNpc} | {PathOf(voice.transform)}",
                 _ => null
             }).Where(line => line != null);
-            File.WriteAllLines(Path.Combine(controlRoot, "dump.txt"), lines!);
+            File.WriteAllLines(Path.Combine(TestChannel.Root, "dump.txt"), lines!);
             foreach (var root in roots) root.SetActive(false);
             yield return SceneManager.UnloadSceneAsync((int)town);
             SetStatus("Scanned " + town);
@@ -877,7 +818,7 @@ public sealed partial class Plugin
 
     private void Snapshot()
     {
-        if (string.IsNullOrEmpty(controlRoot)) return;
+        if (string.IsNullOrEmpty(TestChannel.Root)) return;
         var player = Player.PlayerChar;
         var partner = FirstPartner;
         var actor = partner?.Actor;
@@ -897,7 +838,7 @@ public sealed partial class Plugin
             dungeonRealm = SingletonBehaviour<PlayerStatus>.InstanceExists() ? SingletonBehaviour<PlayerStatus>.Instance.DungeonRealm.ToString() : "",
             effectiveDepth = LevelGenerator.effectiveLevelDepth,
             runSections = string.Join(",", RunSections.Select(section => section.realm + ":" + section.offset)), dlcs = ownedDlcs,
-            netStats = string.Join("\n", NetStatLines()), loadingShown = SingletonBehaviour<LoadingScreenUI>.InstanceExists() && SingletonBehaviour<LoadingScreenUI>.Instance.shown, primaryLevel = player != null ? player.Level : 0, inputState = SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.InstanceExists() ? $"{SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.Instance.ActiveInputMode} {SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.Instance.LocalInputBehavior} blockers {InputBlocker.uiBlockers} menus {InputBlocker.BlockingMenuCount} locked {BrokerMovementLocked(SingletonBehaviour<Cleverous.Prodigy.Input.InputBroker>.Instance)}" : "", sceneDrops = Object.FindObjectsOfType<DroppedItem>().Length, invincible = player != null && InvincibleRef(player), capeBend = player != null && player.GetComponentInChildren<CapeSwing>() is CapeSwing swing ? swing.Bend : -1f, dayPhase = DayPhase(), sunIntensity = groveSun != null ? groveSun.intensity : 0f,
+            netStats = string.Join("\n", NetStatLines()), loadingShown = SingletonBehaviour<LoadingScreenUI>.InstanceExists() && SingletonBehaviour<LoadingScreenUI>.Instance.shown, primaryLevel = player != null ? player.Level : 0, sceneDrops = Object.FindObjectsOfType<DroppedItem>().Length, invincible = player != null && InvincibleRef(player),
             mirroringQuests = MirroringQuests, sharedQuestsReceived = sharedQuestsJson.Length > 0,
             giverQuests = string.Join(", ", Object.FindObjectsOfType<QuestGiver>().Where(giver => giver.Quest != null && giver.Quest.Status != Quest.QuestStatus.None).Select(giver => giver.CharacterName + ":" + giver.Quest.Status)),
             prompt = PromptUI.IsPromptActive ? PromptBodyRef(SingletonBehaviour<PromptUI>.Instance).text : "",
@@ -932,7 +873,6 @@ public sealed partial class Plugin
             statPoints = player != null ? player.UnusedStatPoint : 0, gold = SingletonBehaviour<PlayerStatus>.InstanceExists() ? (long)SingletonBehaviour<PlayerStatus>.Instance.gold : 0,
             dungeonFloors = RunSections.Sum(section => SaveData.CurrentSaveData?.GetRealmSave(section.realm)?.dungeonSave?.dungeons?.Count ?? 0),
             localPet = LocalCompanions().OfType<Pet>().FirstOrDefault() is Pet localPet ? $"{localPet.GetAIState()} hp={localPet.hp:0.0} dead={localPet.MyVitals.IsDead} owned={player!.HasPet(localPet)}" : "",
-            fixtures = string.Join(" ", FixtureObjects().GroupBy(f => f.kind).Select(g => $"{g.Key}={g.Count(f => f.usable)}/{g.Count()}")),
             replicaImpacts = replicaImpacts, skillPoints = player != null ? player.UnusedSkillPoints : 0,
             partnerIcon = partner?.MapIcon != null ? partner.MapIcon.sprite.name + " " + ColorUtility.ToHtmlStringRGB(partner.MapIcon.color) : "",
             partnerPetPortrait = partner?.PetSlot != null && SlotPictureRef(partner.PetSlot).texture != null ? SlotPictureRef(partner.PetSlot).texture.name : "",
@@ -940,9 +880,9 @@ public sealed partial class Plugin
             bagCheck = player != null ? BagCheck(player) : "", vitals = player != null ? $"{player.hp:0}/{player.MaxHP()} {player.mana:0}/{player.MaxMana()}" : "",
             template = LevelGenerator.currentInstance != null ? TemplateRef(LevelGenerator.currentInstance)?.templateName ?? "" : ""
         };
-        var json = JsonUtility.ToJson(telemetry);
-        File.WriteAllText(Path.Combine(controlRoot, "status.json"), json);
-        File.AppendAllText(Path.Combine(controlRoot, "telemetry.jsonl"), json + Environment.NewLine);
+        var json = TestChannel.WithStatus(JsonUtility.ToJson(telemetry));
+        File.WriteAllText(Path.Combine(TestChannel.Root, "status.json"), json);
+        File.AppendAllText(Path.Combine(TestChannel.Root, "telemetry.jsonl"), json + Environment.NewLine);
     }
 
     [Serializable] private sealed class Telemetry
@@ -956,11 +896,11 @@ public sealed partial class Plugin
         public bool rangedEquipped;
         public string dungeonRealm = "", monsterLevels = "", prompt = "", runSections = "";
         public int localDepth, effectiveDepth, itemDepth, dlcs;
-        public float dayPhase, sunIntensity, capeBend;
+        
         public bool mirroringQuests, sharedQuestsReceived, loadingShown, mapRevealed;
-        public string giverQuests = "", netStats = "", inputState = "";
+        public string giverQuests = "", netStats = "";
         public int primaryLevel, sceneDrops;
-        public string townNpcs = "", mainHand = "", localPet = "", fixtures = "", template = "", vitals = "", bagCheck = "", partnerIcon = "", partnerPetPortrait = "", buffs = "";
+        public string townNpcs = "", mainHand = "", localPet = "", template = "", vitals = "", bagCheck = "", partnerIcon = "", partnerPetPortrait = "", buffs = "";
         public int replicaImpacts, skillPoints;
         public int statPoints, dungeonFloors, friendImpacts, localSummons, partnerSummons, mapOpenCells, bagFreeCells;
         public float bleedOut;

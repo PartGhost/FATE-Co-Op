@@ -1,14 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using FateCoop.Core;
 using Tableflip;
 using UnityEngine;
 
-namespace FateCoop.Prototype;
+namespace FateCoop.DayNight;
 
 public sealed partial class Plugin
 {
-    private const float AlwaysDay = -1f, NightSun = 0.25f, NightLampIntensity = 6f, NightLampRange = 4f, NightWaterShade = 0.85f, NightFoam = 0.6f;
+    private const float NightSun = 0.25f, NightLampIntensity = 6f, NightLampRange = 4f, NightWaterShade = 0.85f, NightFoam = 0.6f;
     private const string WaterColor = "_WaterColor", WaterFoam = "_FoamIntensity";
     private static readonly Color Dusk = new Color(1f, 0.78f, 0.6f), DuskSky = new Color(1f, 0.88f, 0.8f), Moon = new Color(0.55f, 0.65f, 1f), NightSky = new Color(0.6f, 0.7f, 1f);
     private static readonly (float Phase, float Sun, Color SunTint, float Ambient, Color AmbientTint)[] DayKeys =
@@ -45,12 +46,13 @@ public sealed partial class Plugin
             .Select(renderer => renderer.material).Select(water => (water, water.GetColor(WaterColor), water.GetFloat(WaterFoam))));
     }
 
-    private float LocalDayPhase() => dayLengthSeconds > 0f ? (Time.realtimeSinceStartup / dayLengthSeconds + dayOffset) % 1f : AlwaysDay;
+    private float LocalDayPhase() => dayLengthSeconds > 0f ? (Time.realtimeSinceStartup / dayLengthSeconds + dayOffset) % 1f : GroveClock.AlwaysDay;
 
     private float DayPhase()
     {
-        if (dayLengthSeconds <= 0f) return AlwaysDay;
-        return !isHost && partners.TryGetValue(HostId, out var host) && host.Frame != null && host.Frame.dayPhase >= 0f ? host.Frame.dayPhase : LocalDayPhase();
+        if (dayLengthSeconds <= 0f) return GroveClock.AlwaysDay;
+        var host = GroveClock.HostPhase();
+        return host >= 0f ? host : LocalDayPhase();
     }
 
     private void UpdateDayNight()

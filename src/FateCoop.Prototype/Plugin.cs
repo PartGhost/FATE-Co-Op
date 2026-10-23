@@ -5,6 +5,7 @@ using System.Linq;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Unity.Mono;
+using FateCoop.Core;
 using HarmonyLib;
 using Tableflip;
 using UnityEngine;
@@ -14,40 +15,31 @@ using UnityEngine.SceneManagement;
 
 namespace FateCoop.Prototype;
 
-[BepInPlugin("local.fatecoop.prototype", "FATE Co-Op", Version)]
+[BepInPlugin(Guid, "FATE Co-Op", SuiteVersion.Value)]
+[BepInDependency(CorePlugin.Guid)]
 public sealed partial class Plugin : BaseUnityPlugin
 {
-    private const string TestGame = "test-game";
+    public const string Guid = "local.fatecoop.prototype";
     internal static Plugin? Active;
     private Harmony? harmony;
     private ConfigEntry<int>? playerCount;
-    private string controlRoot = "";
     private string status = "Starting";
-    private bool showPanel = true, testTools, transitioning, worldReady;
+    private bool showPanel = true, transitioning, worldReady;
     private float monsterToughness;
     private Coroutine? respawn;
     private int worldEpoch, networkAccepted, networkRejected;
-    private FileStream? runningLock;
 
     private void Awake()
     {
         try
         {
-            testTools = Config.Bind("Development", "TestTools", false, "Command files and status telemetry for the automated tests.").Value;
             monsterToughness = Math.Max(1f, Config.Bind("Co-op", "MonsterToughness", 1.75f, "How much tougher monsters get for each extra player on the floor. 1 is the same as solo.").Value);
             playerCount = Config.Bind("Co-op", "Players", 2, new ConfigDescription("Lobby size when hosting. Change it with the arrows in Host co-op.", new AcceptableValueRange<int>(MinPlayers, MaxPlayers)));
-            dayLengthSeconds = Math.Max(0f, Config.Bind("Grove", "DayLengthMinutes", 20f, "Minutes for one day and night in Grove. In co-op everyone follows the host's clock. 0 keeps it day.").Value) * 60f;
-            if (testTools)
-            {
-                var game = Path.GetFullPath(Paths.GameRootPath);
-                runningLock = new FileStream(Path.Combine(game, "fate-coop-running.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-                controlRoot = Path.Combine(Directory.GetParent(game)!.FullName, "artifacts", "runtime" + Path.GetFileName(game).Substring(TestGame.Length));
-                Directory.CreateDirectory(Path.Combine(controlRoot, "commands"));
-                Directory.CreateDirectory(Path.Combine(controlRoot, "processed"));
-            }
             Active = this;
             Application.runInBackground = true;
-            harmony = new Harmony("local.fatecoop.prototype");
+            harmony = new Harmony(Guid);
+            GroveClock.HostPhase = HostDayPhase;
+            GameAssets.Ready += PrepareCoopContent;
             SceneManager.sceneLoaded += OnSceneLoaded;
             SceneLoad.OnSceneLoaded += OnGameSceneLoaded;
             PlayerManager.OnPlayerSpawn += OnPrimarySpawn;
@@ -58,22 +50,14 @@ public sealed partial class Plugin : BaseUnityPlugin
             InstallQuestHooks();
             InstallVisualHooks();
             InstallMenuHooks();
-            InstallControlHooks();
             InstallReviveHooks();
             InstallAllySpellHooks();
             InstallPortalHooks();
             InstallSoundHooks();
             InstallRangedHooks();
-            InstallQuestLogHooks();
             InstallTownNpcHooks();
-            InstallAssetHooks();
-            InstallDungeonPropHooks();
-            InstallExperienceGemHooks();
-            InstallBagSortHooks();
             InstallRunHooks();
-            InstallCapeHooks();
-            InstallGameFixHooks();
-            if (testTools) InstallDevHooks();
+            if (TestChannel.Enabled) InstallDevHooks();
             commandLineLobby = LobbyFromArguments(Environment.GetCommandLineArgs());
             SetStatus("Ready.");
             Snapshot();
@@ -99,9 +83,22 @@ public sealed partial class Plugin : BaseUnityPlugin
         respawn = StartCoroutine(SettleWorld());
     }
 
+    private void PrepareCoopContent(FateDB db)
+    {
+        try { AddPortalBackFace(db); }
+        catch (Exception e) { Logger.LogError($"Couldn't set up the portal back face: {e}"); }
+        try { PrepareRun(db); }
+        catch (Exception e)
+        {
+            Logger.LogError($"Couldn't set up the merged run, turning FATE Co-Op off so the game runs unmodded: {e}");
+            harmony?.UnpatchSelf();
+            Active = null;
+            enabled = false;
+        }
+    }
+
     private void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene, LoadSceneMode mode)
     {
-        PrepareAssets();
         if (borrowingNpcs && mode == LoadSceneMode.Additive) KeepBorrowedNpcs(scene);
         Snapshot();
     }
@@ -111,7 +108,6 @@ public sealed partial class Plugin : BaseUnityPlugin
         if (scene == Tableflip.Scene.MainMenu_Grove || scene == Tableflip.Scene.GameSelect || scene == Tableflip.Scene.Engagement) transitioning = false;
         else if (scene == Tableflip.Scene.Town_Grove)
         {
-            CaptureGroveDay();
             SignalWorldReady();
             FurnishTown();
         }
@@ -173,10 +169,9 @@ public sealed partial class Plugin : BaseUnityPlugin
             UpdatePartnerHud();
             UpdateNameplates();
             UpdateChat();
-            UpdateDayNight();
             UpdateNetStats(keyboard);
             if (keyboard != null && keyboard.f11Key.wasPressedThisFrame) showPanel = !showPanel;
-            if (testTools) UpdateDevTools();
+            if (TestChannel.Enabled) UpdateDevTools();
         }
         catch (Exception e) { Logger.LogError(e); }
     }
@@ -206,11 +201,11 @@ public sealed partial class Plugin : BaseUnityPlugin
         SceneManager.sceneLoaded -= OnSceneLoaded;
         SceneLoad.OnSceneLoaded -= OnGameSceneLoaded;
         PlayerManager.OnPlayerSpawn -= OnPrimarySpawn;
+        GameAssets.Ready -= PrepareCoopContent;
         EndSession("");
         lobbyInvites?.Dispose();
         presenceJoins?.Dispose();
         harmony?.UnpatchSelf();
-        runningLock?.Dispose();
         if (Active == this) Active = null;
     }
 }
