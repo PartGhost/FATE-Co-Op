@@ -20,6 +20,12 @@ $start = State a
 $paired = Wait-Pair { param($a, $b) $a.dungeonDepth -ge 1 -and $a.worldKey -ne '' -and $a.worldKey -eq $b.worldKey -and $a.guestId -ne 0 -and $b.guestId -ne 0 } 'Shared floor' 90
 Send 'test-resume' 'a'
 Send 'test-resume' 'b'
+foreach ($instance in 'a', 'b') {
+    for ($i = 0; $i -lt 10 -and (State $instance).bagFreeCells -lt 12; $i++) {
+        Send 'test-trash 1' $instance
+        Start-Sleep -Seconds 1.5
+    }
+}
 $base = $null
 for ($i = 0; $i -lt 20 -and !$base; $i++) {
     $first = Wait-Pair { param($a, $b) $a.groundItems -eq $b.groundItems } 'Matching ground items'
