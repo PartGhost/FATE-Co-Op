@@ -11,7 +11,7 @@ namespace FateCoop.Prototype;
 
 public sealed partial class Plugin
 {
-    internal const string Version = "0.28.0";
+    internal const string Version = "0.28.1";
     internal const int MaxMessageBytes = Constants.k_cbMaxSteamNetworkingSocketsMessageSizeSend;
     internal const int HostId = 0;
     private const int Everyone = -1, Unassigned = -2;
@@ -41,7 +41,7 @@ public sealed partial class Plugin
         public float primaryYaw = 0, swingSpeed = 0, xpPercent = 0, time = 0, revive = 0, dayPhase = AlwaysDay, worldBorn;
         public int seq, owner, travelDepth, portalDepth, reviveTarget = Unassigned, dlcs;
         public int swings, casts, hp, maxHp, mana, maxMana, level, depth, fishing, arrows, levelUps, spells, spellTarget;
-        public bool running;
+        public bool running, mapRevealed;
         public Vector3 arrowEnd, spellAim, portalPosition;
         public string petJson = "", castSpell = "", effects = "", spellName = "", portalWorld = "";
         public List<string> summonJson = new List<string>();
@@ -118,7 +118,7 @@ public sealed partial class Plugin
         {
             seq = ++frameSeq, time = Time.unscaledTime, dlcs = ownedDlcs, dayPhase = LocalDayPhase(),
             worldKey = SharedWorldReady() ? CurrentWorldKey() : "", worldBorn = worldBorn, owner = worldOwner, travelDepth = transitioning ? travelDepth : 0, scene = SceneLoad.CurrentScene.ToString(),
-            primaryPosition = player != null ? player.transform.position : Vector3.zero, primaryYaw = player != null ? player.transform.eulerAngles.y : 0f, running = LocalRunning(),
+            primaryPosition = player != null ? player.transform.position : Vector3.zero, primaryYaw = player != null ? player.transform.eulerAngles.y : 0f, running = LocalRunning(), mapRevealed = MapRevealed(),
             hp = player != null ? player.HP() : 0, maxHp = player != null ? player.MaxHP() : 0, mana = player != null ? player.Mana() : 0, maxMana = player != null ? player.MaxMana() : 0,
             level = player != null ? player.Level : 0, xpPercent = player != null ? player.GetPctToNextLevel() : 0f, depth = RunFloorHere(),
             petJson = JsonUtility.ToJson(LocalPetSnapshot()), summonJson = LocalSummonSnapshots().Select(JsonUtility.ToJson).ToList(), swings = localSwings, swingSpeed = localSwingSpeed, casts = localCasts, castSpell = localCastSpell,
@@ -311,6 +311,9 @@ public sealed partial class Plugin
         partner.DestroyHud();
         if (isHost) Send("left", partner.Id.ToString());
         if (partner.Name.Length > 0 && reason.Length > 0) Notify(partner.Name + reason);
+        if (Connected || OwnsWorld) return;
+        ResetGround();
+        TakeOwnership();
     }
 
     private void EndSession(string reason)
@@ -318,11 +321,6 @@ public sealed partial class Plugin
         if (link == null) return;
         if (downed) DieForReal();
         foreach (var partner in partners.Values.ToList()) DropPartner(partner, "");
-        if (!OwnsWorld)
-        {
-            ResetGround();
-            TakeOwnership();
-        }
         link.Dispose();
         link = null;
         isHost = true;

@@ -25,6 +25,10 @@ foreach ($direction in '1 0', '0 1', '-1 0', '0 -1') {
 }
 if (!$mapped) { throw 'The guest walked four ways without opening any of the host''s map.' }
 Write-Output ('The guest walking opened ' + ($mapped.a.mapOpenCells - $start.a.mapOpenCells) + ' map cells for the host.')
+if ($mapped.b.mapRevealed) { throw 'The guest''s map was already revealed before Mental Map.' }
+Send 'test-discover'
+Wait-Pair { param($a, $b) $a.mapRevealed -and $b.mapRevealed } 'Mental Map revealing the guest''s map' | Out-Null
+Write-Output 'The host''s Mental Map revealed the whole floor for the guest too.'
 
 $before = Wait-Pair { param($a, $b) $true } 'State'
 Send 'test-summon' 'b'
@@ -48,4 +52,4 @@ $town = Wait-Pair { param($a, $b) $a.gameScene -eq 'Town_Grove' -and $b.gameScen
 Send 'test-npc SullivantheReaper yes'
 Wait-Pair { param($a, $b) $b.status -like '*reset the dungeons*' -and $a.status -like '*dungeons were reset*' } 'Dungeon reset reaching the guest' | Out-Null
 Write-Output ('Dungeon reset: host floors ' + $town.a.dungeonFloors + ' -> ' + (State a).dungeonFloors + ', guest floors ' + $town.b.dungeonFloors + ' -> ' + (State b).dungeonFloors + '.')
-Write-Output 'PASS: friends reveal the map for each other, summons stay friendly copies, friend heals show on you, and Sullivan resets dungeons for everyone.'
+Write-Output 'PASS: friends reveal the map for each other (Mental Map too), summons stay friendly copies, friend heals show on you, and Sullivan resets dungeons for everyone.'

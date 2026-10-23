@@ -1,3 +1,8 @@
+# Grove co-op prototype — 0.28.1
+
+- **Stuck after the floor owner drops out.** The user joined a friend's floor, the friend's game went silent and was dropped, and the world stopped responding: monsters frozen, chests and pickups forwarded to nobody. Dropping the last partner left `Connected` false, and `UpdateCoop` returns before `UpdateOwnership` when not connected, so `worldOwner` stayed on the gone friend. `DropPartner` now takes the floor over (`ResetGround` + `TakeOwnership`) when nobody is left and you don't own it; `EndSession` uses the same path. New `Test-OwnerDrop.ps1` has the host join the guest's floor, kills the guest's game and checks the host takes the floor without a reload.
+- **Mental Map reveals the floor for friends.** Frames carry `mapRevealed` (the minimap fog's `removeFog`), and a player whose friend on the same floor has a revealed map runs `LevelGenerator.DiscoverAll`, so a friend arriving later gets it too. Dev command `test-discover`; `Test-MapAndSummons` checks it.
+
 # Grove co-op prototype — 0.28.0
 
 The user's to-do list from the 0.27 Steam session, plus a performance pass (the friend reported unstable frame rates).

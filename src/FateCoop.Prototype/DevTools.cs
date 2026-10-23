@@ -364,6 +364,9 @@ public sealed partial class Plugin
                     .Select(r => $"{PathOf(r.transform)} | {r.GetType().Name} | layer {LayerMask.LayerToName(r.gameObject.layer)} | icon {(r.GetComponentInParent<MiniMapIconUI>() is MiniMapIconUI ui ? (ui.fixedRotation ? "fixed" : "free") : "none")} | rot {r.transform.eulerAngles} | active {r.gameObject.activeInHierarchy}"));
                 SetStatus("Map icons dumped");
                 break;
+            case "test-discover":
+                LevelGenerator.currentInstance.DiscoverAll();
+                break;
             case "test-portals":
                 SetStatus("Portals: " + string.Join("; ", Object.FindObjectsOfType<EnterPortal>().Select(portal => $"{portal.name} {portal.portalType} {portal.transform.position} active {portal.gameObject.activeInHierarchy}")));
                 break;
@@ -925,7 +928,7 @@ public sealed partial class Plugin
             mainHand = player != null ? player.inventory.FirstOrDefault(i => i != null && i.slotIndex == MainHandSlot)?.itemName ?? "" : "",
             bleedOut = downed ? downedUntil - Time.unscaledTime : 0f, friendImpacts = friendImpacts, localSummons = LocalSummonSnapshots().Count,
             partnerSummons = partners.Values.Sum(p => p.Summons.Count(s => s.Copy != null)),
-            mapOpenCells = SingletonBehaviour<MinimapFogGridUI>.InstanceExists() ? FogCellsRef(SingletonBehaviour<MinimapFogGridUI>.Instance)?.Count(open => open) ?? 0 : 0,
+            mapRevealed = MapRevealed(), mapOpenCells = SingletonBehaviour<MinimapFogGridUI>.InstanceExists() ? FogCellsRef(SingletonBehaviour<MinimapFogGridUI>.Instance)?.Count(open => open) ?? 0 : 0,
             statPoints = player != null ? player.UnusedStatPoint : 0, gold = SingletonBehaviour<PlayerStatus>.InstanceExists() ? (long)SingletonBehaviour<PlayerStatus>.Instance.gold : 0,
             dungeonFloors = RunSections.Sum(section => SaveData.CurrentSaveData?.GetRealmSave(section.realm)?.dungeonSave?.dungeons?.Count ?? 0),
             localPet = LocalCompanions().OfType<Pet>().FirstOrDefault() is Pet localPet ? $"{localPet.GetAIState()} hp={localPet.hp:0.0} dead={localPet.MyVitals.IsDead} owned={player!.HasPet(localPet)}" : "",
@@ -954,7 +957,7 @@ public sealed partial class Plugin
         public string dungeonRealm = "", monsterLevels = "", prompt = "", runSections = "";
         public int localDepth, effectiveDepth, itemDepth, dlcs;
         public float dayPhase, sunIntensity, capeBend;
-        public bool mirroringQuests, sharedQuestsReceived, loadingShown;
+        public bool mirroringQuests, sharedQuestsReceived, loadingShown, mapRevealed;
         public string giverQuests = "", netStats = "", inputState = "";
         public int primaryLevel, sceneDrops;
         public string townNpcs = "", mainHand = "", localPet = "", fixtures = "", template = "", vitals = "", bagCheck = "", partnerIcon = "", partnerPetPortrait = "", buffs = "";

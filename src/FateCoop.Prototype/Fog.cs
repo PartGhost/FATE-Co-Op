@@ -16,10 +16,13 @@ public sealed partial class Plugin
     private static readonly AccessTools.FieldRef<MinimapFogGridUI, bool> FogClearedRef = AccessTools.FieldRefAccess<MinimapFogGridUI, bool>("removeFog");
     private static readonly MethodInfo RevealFogMethod = AccessTools.Method(typeof(MinimapFogGridUI), "UpdateFogMesh");
 
+    private static bool MapRevealed() => SceneLoad.CurrentScene == Tableflip.Scene.Dungeon && SingletonBehaviour<MinimapFogGridUI>.InstanceExists() && FogClearedRef(SingletonBehaviour<MinimapFogGridUI>.Instance);
+
     private void UpdateSharedMap()
     {
         if (SceneLoad.CurrentScene != Tableflip.Scene.Dungeon || LevelGenerator.currentInstance == null || !SingletonBehaviour<MinimapFogGridUI>.InstanceExists()) return;
         var fog = SingletonBehaviour<MinimapFogGridUI>.Instance;
+        if (!FogClearedRef(fog) && WorldPartners().Any(p => p.Frame!.mapRevealed)) LevelGenerator.currentInstance.DiscoverAll();
         var cells = FogCellsRef(fog);
         var width = FogWidthRef(fog);
         var maze = LevelGenerator.currentInstance.GetMaze();
